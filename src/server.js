@@ -3,13 +3,16 @@ const env = require('./config/env');
 const { connectDb } = require('./config/db');
 const { setupBot } = require('./bot/setupBot');
 const { startReminderJob } = require('./jobs/reminderJob');
+const { startChatCleanupJob } = require('./jobs/chatCleanupJob');
 
 async function bootstrap() {
   await connectDb();
   const bot = setupBot();
   if (bot) {
     await bot.launch();
+    app.locals.bot = bot;
     startReminderJob(bot);
+    startChatCleanupJob(bot);
   }
 
   app.listen(env.port, () => {

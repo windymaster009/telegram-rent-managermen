@@ -5,7 +5,7 @@ const { validatePhone } = require('../utils/validators');
 const { addMonth } = require('../utils/date');
 
 async function addTenantToRoom(payload) {
-  const { roomNumber, fullName, phone, telegramUsername, moveInDate, rentPrice } = payload;
+  const { roomNumber, fullName, phone, telegramUsername, telegramChatId, moveInDate, rentPrice } = payload;
 
   if (!validatePhone(phone)) {
     throw Object.assign(new Error('Invalid phone number format.'), { status: 400 });
@@ -25,6 +25,7 @@ async function addTenantToRoom(payload) {
     fullName,
     phone,
     telegramUsername: telegramUsername || null,
+    telegramChatId: telegramChatId ? String(telegramChatId) : null,
     moveInDate: moveInDate ? new Date(moveInDate) : new Date(),
     roomId: room._id,
     isActive: true
