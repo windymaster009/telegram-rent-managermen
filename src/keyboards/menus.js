@@ -4,13 +4,21 @@ function getAdminMainMenu() {
   return Markup.keyboard([
     ['🏠 Rooms', '💳 Payments'],
     ['📊 Dashboard', '👥 Tenants'],
-    ['⚠️ Late Rent', '⚙️ Settings']
+    ['📨 Requests', '⚠️ Late Rent'],
+    ['⚙️ Settings']
   ]).resize();
 }
 
 function getTenantMainMenu(isLinked = true) {
   if (!isLinked) return Markup.keyboard([['🔗 Link My Room'], ['📞 Contact Admin']]).resize();
   return Markup.keyboard([['🏠 My Room', '💳 My Payment'], ['📞 Contact Admin']]).resize();
+}
+
+function getGuestMainMenu() {
+  return Markup.keyboard([
+    ['📝 Register My Room', '🔎 Check Rooms to Rent'],
+    ['📞 Contact Admin']
+  ]).resize();
 }
 
 function getRoomsMenu() {
@@ -57,12 +65,23 @@ function getRoomActions(roomId) {
   ]);
 }
 
+function getRequestMenu() {
+  return Markup.inlineKeyboard([
+    [Markup.button.callback('📋 Pending Requests', 'request:list:pending:1')],
+    [Markup.button.callback('✅ Approved Requests', 'request:list:approved:1')],
+    [Markup.button.callback('❌ Rejected Requests', 'request:list:rejected:1')],
+    [Markup.button.callback('🔙 Back', 'panel:home')]
+  ]);
+}
+
 module.exports = {
   getAdminMainMenu,
   getTenantMainMenu,
+  getGuestMainMenu,
   getRoomsMenu,
   getPaymentsMenu,
   getTenantsMenu,
   getSettingsMenu,
-  getRoomActions
+  getRoomActions,
+  getRequestMenu
 };

@@ -25,6 +25,49 @@ function formatRoomCard(room, tenant, payment) {
   return lines.join('\n');
 }
 
+function formatTenantRoomCard(room, tenant, payment) {
+  return [
+    getSectionHeader('My Room', '🏠'),
+    `Room: ${room.roomNumber}`,
+    `Status: ${room.status === 'rented' ? '🔴 Rented' : '🟢 Available'}`,
+    `Rent: ${formatMoney(room.rentPrice)}`,
+    '',
+    '📅 Stay Info',
+    `Move-in: ${formatDate(tenant.moveInDate)}`,
+    `Days stayed: ${daysBetween(tenant.moveInDate)}`,
+    '',
+    '💳 Current Payment',
+    `Status: ${payment?.status || '-'}`,
+    `Due date: ${payment ? formatDate(payment.dueDate) : '-'}`
+  ].join('\n');
+}
+
+function formatGuestRoomCard(room) {
+  return [
+    getSectionHeader(`Room ${room.roomNumber}`, '🏠'),
+    'Status: 🟢 Available',
+    `Rent: ${formatMoney(room.rentPrice)}`,
+    '',
+    '📝 Details',
+    `Room number: ${room.roomNumber}`,
+    'Availability: Ready to rent',
+    room.notes ? `Notes: ${room.notes}` : null
+  ].filter(Boolean).join('\n');
+}
+
+function formatRentalRequestCard(request) {
+  return [
+    getSectionHeader('Rental Request', '📝'),
+    `Room: ${request.roomNumber}`,
+    `Name: ${request.fullName}`,
+    `Phone: ${request.phone}`,
+    `Telegram: ${request.telegramUsername ? `@${request.telegramUsername}` : 'No username'}`,
+    `Requested at: ${formatDate(request.createdAt)}`,
+    `Note: ${request.note || '-'}`,
+    `Status: ${request.status}`
+  ].join('\n');
+}
+
 function formatPaymentCard(payment) {
   return [
     getSectionHeader('Payment Details', '💳'),
@@ -76,6 +119,9 @@ function formatDashboardCard(stats) {
 
 module.exports = {
   formatRoomCard,
+  formatTenantRoomCard,
+  formatGuestRoomCard,
+  formatRentalRequestCard,
   formatPaymentCard,
   formatTenantCard,
   formatDashboardCard,

@@ -12,6 +12,7 @@ Production-ready Node.js + Express + MongoDB + Telegraf bot for managing a 100-r
 - Room photo support using Telegram `file_id` (no local file storage)
 - PayWay rent payment flow with QR (primary) and payment link (secondary)
 - Webhook-driven payment confirmation with tenant/admin notifications
+- Guest flow for room browsing and rental request submission
 
 ## Stack
 - Node.js
@@ -59,6 +60,11 @@ Tenant:
 - 📞 Contact Admin
 - (if unlinked) 🔗 Link My Room
 
+Guest (not linked and not admin):
+- 📝 Register My Room
+- 🔎 Check Rooms to Rent
+- 📞 Contact Admin
+
 ### Nested screens (inline only)
 - Rooms / Payments / Tenants / Settings use compact inline menus
 - Pagination and drill-down views edit the same panel message when possible
@@ -71,6 +77,14 @@ Tenant:
 - Dashboard card with grouped summary sections
 - Room detail supports image display when `photoFileId` exists; otherwise text fallback
 - Tenant payment screen includes Pay by QR, Pay by Link, and Chat Admin
+- Tenant **My Room** and guest room-detail pages display room photo when available (`photoFileId`)
+
+## Rental request flow
+- Guests can browse only free rooms with pagination.
+- Guest room details include photo (if available), rent, and notes.
+- Guests can submit rental requests with full name, phone, and optional note.
+- Admin receives instant notification with chat shortcut and approve/reject actions.
+- Admin can review requests from **📨 Requests** menu (pending/approved/rejected).
 
 ## PayWay payment flow
 1. Tenant opens **💳 My Payment**.

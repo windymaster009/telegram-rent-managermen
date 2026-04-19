@@ -7,10 +7,10 @@ const tenantService = require('../services/tenantService');
 const paymentService = require('../services/paymentService');
 const Room = require('../models/Room');
 const { runReminderCheckOnce, resendTenantReminder } = require('../jobs/reminderJob');
-const { getAdminMainMenu, getTenantMainMenu, getRoomsMenu, getPaymentsMenu, getTenantsMenu, getSettingsMenu, getRoomActions } = require('../keyboards/menus');
+const { getAdminMainMenu, getTenantMainMenu, getGuestMainMenu, getRoomsMenu, getPaymentsMenu, getTenantsMenu, getSettingsMenu, getRoomActions, getRequestMenu } = require('../keyboards/menus');
 const { paginate } = require('../utils/pagination');
 const { safeEditOrReply } = require('../utils/safeEditOrReply');
-const { formatRoomCard, formatPaymentCard, formatTenantCard, formatDashboardCard, getSectionHeader } = require('../formatters/cards');
+const { formatRoomCard, formatTenantRoomCard, formatGuestRoomCard, formatRentalRequestCard, formatPaymentCard, formatTenantCard, formatDashboardCard, getSectionHeader } = require('../formatters/cards');
 const { chunkTwoColumns, getPaginationRow } = require('../navigation/panels');
 const { clearFlow, startFlow } = require('../flows/state');
 const { formatMoney } = require('../utils/format');
@@ -18,6 +18,7 @@ const { formatDate, daysBetween } = require('../utils/date');
 const { createQrPayment } = require('../services/paywayQrService');
 const { createPaymentLink } = require('../services/paywayLinkService');
 const { getTenantPaymentHistory } = require('../services/paymentHistoryService');
+const rentalRequestService = require('../services/rentalRequestService');
 
 function callback(parts) {
   return parts.join(':');
@@ -28,9 +29,7 @@ function adminChatButtonRow() {
   return [Markup.button.url('📞 Chat Admin', `https://t.me/${env.adminTelegramUsername.replace('@', '')}`)];
 }
 
-async function sendRoomCard(ctx, room, tenant, payment) {
-  const caption = formatRoomCard(room, tenant, payment);
-  const actions = getRoomActions(room._id);
+async function sendRoomDetailCard(ctx, room, caption, actions) {
   if (room.photoFileId || room.photoUrl) {
     const photo = room.photoFileId || room.photoUrl;
     try {
@@ -42,6 +41,10 @@ async function sendRoomCard(ctx, room, tenant, payment) {
     }
   }
   return ctx.reply(`ℹ️ No photo available\n\n${caption}`, actions);
+}
+
+async function sendRoomCard(ctx, room, tenant, payment) {
+  return sendRoomDetailCard(ctx, room, formatRoomCard(room, tenant, payment), getRoomActions(room._id));
 }
 
 async function renderPanel(ctx, text, keyboard) {
@@ -66,7 +69,11 @@ async function showHome(ctx) {
     return;
   }
   const tenant = await tenantService.getTenantByChatId(ctx.chat.id);
-  await ctx.reply('Choose an option below.', getTenantMainMenu(Boolean(tenant)));
+  if (tenant) {
+    await ctx.reply('Choose an option below.', getTenantMainMenu(true));
+    return;
+  }
+  await ctx.reply('Welcome! Please choose an option below.', getGuestMainMenu());
 }
 
 async function openRoomsPanel(ctx) {
@@ -81,6 +88,9 @@ async function openTenantsPanel(ctx) {
 async function openSettingsPanel(ctx) {
   return renderPanel(ctx, '⚙️ Settings\nChoose an action:', getSettingsMenu());
 }
+async function openRequestsPanel(ctx) {
+  return renderPanel(ctx, '📨 Requests\nChoose an option below:', getRequestMenu());
+}
 
 async function showRoomList(ctx, type = 'all', page = 1) {
   const rooms = await roomService.listRooms(type === 'all' ? {} : { status: type });
@@ -93,6 +103,38 @@ async function showRoomList(ctx, type = 'all', page = 1) {
   rows.push([Markup.button.callback('🔙 Rooms Menu', 'panel:rooms')]);
 
   return renderPanel(ctx, `🏠 Rooms\n━━━━━━━━━━\n${type.toUpperCase()} • ${p.total} rooms`, { reply_markup: { inline_keyboard: rows } });
+}
+
+async function showAvailableRooms(ctx, page = 1) {
+  const rooms = await roomService.listRooms({ status: 'free' });
+  if (!rooms.length) return renderPanel(ctx, '🏠 Available Rooms\nNo free rooms right now.', { reply_markup: { inline_keyboard: [[Markup.button.callback('🔙 Back', 'panel:home')]] } });
+  const p = paginate(rooms, page, 6);
+  const buttons = p.data.map((room) => Markup.button.callback(`${room.roomNumber} 🟢`, callback(['guest', 'room', room._id])));
+  const rows = chunkTwoColumns(buttons);
+  rows.push(getPaginationRow(callback(['guest', 'available']), p.currentPage, p.totalPages));
+  rows.push([Markup.button.callback('🔙 Back', 'panel:home')]);
+  return renderPanel(ctx, '🏠 Available Rooms\nChoose a room to view details.', { reply_markup: { inline_keyboard: rows } });
+}
+
+async function showGuestRoomCard(ctx, roomId) {
+  const room = await roomService.getRoomById(roomId);
+  if (!room || room.status !== 'free') return safeEditOrReply(ctx, 'Room is not available.');
+  return sendRoomDetailCard(
+    ctx,
+    room,
+    formatGuestRoomCard(room),
+    { reply_markup: { inline_keyboard: [[Markup.button.callback('✅ Rent This Room', callback(['guest', 'rent', room._id]))], [Markup.button.callback('🔙 Back to Available Rooms', callback(['guest', 'available', '1']))]] } }
+  );
+}
+
+async function showRequestList(ctx, status = 'pending', page = 1) {
+  const requests = await rentalRequestService.listRequests(status);
+  if (!requests.length) return renderPanel(ctx, `📨 Requests\nNo ${status} requests.`, getRequestMenu());
+  const p = paginate(requests, page, 6);
+  const rows = p.data.map((r) => [Markup.button.callback(`${r.roomNumber} • ${r.fullName}`, callback(['request', 'view', r._id]))]);
+  rows.push(getPaginationRow(callback(['request', 'list', status]), p.currentPage, p.totalPages));
+  rows.push([Markup.button.callback('🔙 Back', 'panel:requests')]);
+  return renderPanel(ctx, `📨 ${status[0].toUpperCase()}${status.slice(1)} Requests`, { reply_markup: { inline_keyboard: rows } });
 }
 
 async function showRoomCard(ctx, roomId) {
@@ -216,8 +258,15 @@ function setupBot() {
   bot.hears('💳 Payments', requireAdmin, openPaymentsPanel);
   bot.hears('📊 Dashboard', requireAdmin, async (ctx) => showDashboard(ctx));
   bot.hears('👥 Tenants', requireAdmin, openTenantsPanel);
+  bot.hears('📨 Requests', requireAdmin, openRequestsPanel);
   bot.hears('⚙️ Settings', requireAdmin, openSettingsPanel);
   bot.hears('⚠️ Late Rent', requireAdmin, async (ctx) => showPaymentsList(ctx, 'overdue', 1));
+
+  bot.hears('📝 Register My Room', async (ctx) => {
+    startFlow(ctx, 'tenant_link', 'room');
+    await safeEditOrReply(ctx, `${getSectionHeader('Register My Room', '📝')}\nEnter your room number.`, { reply_markup: { inline_keyboard: [[Markup.button.callback('❌ Cancel', 'flow:cancel')]] } });
+  });
+  bot.hears('🔎 Check Rooms to Rent', async (ctx) => showAvailableRooms(ctx, 1));
 
   bot.hears('🔗 Link My Room', async (ctx) => {
     startFlow(ctx, 'tenant_link', 'room');
@@ -227,10 +276,12 @@ function setupBot() {
     const tenant = await tenantService.getTenantByChatId(ctx.chat.id);
     if (!tenant) return ctx.reply('Please link your room first.', getTenantMainMenu(false));
     const payment = await paymentService.getTenantCurrentPayment(tenant._id);
-    return renderPanel(ctx, formatRoomCard(tenant.roomId, tenant, payment), Markup.inlineKeyboard([
+    const actions = Markup.inlineKeyboard([
       [Markup.button.callback('💳 My Payment', 'tenant:mypayment')],
-      [Markup.button.callback('📞 Contact Admin', 'tenant:contact')]
-    ]));
+      [env.adminTelegramUsername ? Markup.button.url('📞 Chat Admin', `https://t.me/${env.adminTelegramUsername.replace('@', '')}`) : Markup.button.callback('📞 Contact Admin', 'tenant:contact')],
+      [Markup.button.callback('🔙 Back', 'panel:home')]
+    ]);
+    return sendRoomDetailCard(ctx, tenant.roomId, formatTenantRoomCard(tenant.roomId, tenant, payment), actions);
   });
   bot.hears('💳 My Payment', async (ctx) => {
     const tenant = await tenantService.getTenantByChatId(ctx.chat.id);
@@ -275,6 +326,7 @@ function setupBot() {
       if (data === 'panel:rooms') return openRoomsPanel(ctx);
       if (data === 'panel:payments') return openPaymentsPanel(ctx);
       if (data === 'panel:tenants') return openTenantsPanel(ctx);
+      if (data === 'panel:requests') return openRequestsPanel(ctx);
       if (data === 'panel:settings') return openSettingsPanel(ctx);
       if (data === 'flow:cancel') {
         clearFlow(ctx);
@@ -293,6 +345,44 @@ function setupBot() {
         }
         return ctx.answerCbQuery();
       }
+      if (data === 'flow:skipnote') {
+        if (ctx.session.flow === 'rental_request' && ctx.session.step === 'note') {
+          ctx.session.flowData.note = '';
+          ctx.session.step = 'confirm';
+          const d = ctx.session.flowData;
+          return safeEditOrReply(ctx, `📝 Rental Request\n━━━━━━━━━━\nRoom: ${d.roomNumber}\nName: ${d.fullName}\nPhone: ${d.phone}\nTelegram: @${ctx.from.username || '-'}\nNote: -`, {
+            reply_markup: { inline_keyboard: [[Markup.button.callback('✅ Submit Request', 'flow:submitrequest'), Markup.button.callback('❌ Cancel', 'flow:cancel')]] }
+          });
+        }
+        return ctx.answerCbQuery();
+      }
+      if (data === 'flow:submitrequest') {
+        if (ctx.session.flow === 'rental_request' && ctx.session.step === 'confirm') {
+          const d = ctx.session.flowData;
+          const request = await rentalRequestService.createRentalRequest({
+            roomId: d.roomId,
+            fullName: d.fullName,
+            phone: d.phone,
+            telegramUserId: ctx.from.id,
+            telegramUsername: ctx.from.username,
+            telegramChatId: ctx.chat.id,
+            note: d.note || ''
+          });
+          clearFlow(ctx);
+          for (const adminId of env.adminTelegramIds) {
+            const rows = [];
+            if (request.telegramUsername) rows.push([Markup.button.url('💬 Chat User', `https://t.me/${request.telegramUsername}`)]);
+            rows.push([Markup.button.callback('✅ Approve', callback(['request', 'approve', request._id])), Markup.button.callback('❌ Reject', callback(['request', 'reject', request._id]))]);
+            rows.push([Markup.button.callback('📋 View Requests', callback(['request', 'list', 'pending', '1']))]);
+            await ctx.telegram.sendMessage(adminId, `🆕 New Rental Request\n━━━━━━━━━━\nRoom: ${request.roomNumber}\nName: ${request.fullName}\nPhone: ${request.phone}\nTelegram: ${request.telegramUsername ? '@' + request.telegramUsername : 'No username'}\nUser ID: ${request.telegramUserId}\nNote: ${request.note || '-'}`, { reply_markup: { inline_keyboard: rows } });
+          }
+          const successRows = [];
+          if (env.adminTelegramUsername) successRows.push([Markup.button.url('📞 Chat Admin', `https://t.me/${env.adminTelegramUsername.replace('@', '')}`)]);
+          successRows.push([Markup.button.callback('🔎 Check Rooms to Rent', callback(['guest', 'available', '1']))]);
+          successRows.push([Markup.button.callback('🔙 Back', 'panel:home')]);
+          return safeEditOrReply(ctx, '✅ Your rental request has been sent to the admin.\nWe will contact you soon.', { reply_markup: { inline_keyboard: successRows } });
+        }
+      }
       if (data === 'dashboard:refresh') return showDashboard(ctx, true);
       if (data === 'tenant:mypayment') return ctx.reply('Tap 💳 My Payment from main menu.');
       if (data === 'tenant:contact') {
@@ -305,6 +395,14 @@ function setupBot() {
       const [scope, action, p1, p2] = data.split(':');
 
       if (scope === 'rooms' && action === 'list') return showRoomList(ctx, p1, Number(p2 || 1));
+      if (scope === 'guest' && action === 'available') return showAvailableRooms(ctx, Number(p1 || 1));
+      if (scope === 'guest' && action === 'room') return showGuestRoomCard(ctx, p1);
+      if (scope === 'guest' && action === 'rent') {
+        const room = await roomService.getRoomById(p1);
+        if (!room || room.status !== 'free') return safeEditOrReply(ctx, 'Room is no longer available.');
+        startFlow(ctx, 'rental_request', 'name', { roomId: room._id, roomNumber: room.roomNumber });
+        return safeEditOrReply(ctx, 'Please enter your full name.', { reply_markup: { inline_keyboard: [[Markup.button.callback('❌ Cancel', 'flow:cancel')]] } });
+      }
       if (scope === 'rooms' && action === 'search') {
         startFlow(ctx, 'search_room', 'input');
         return safeEditOrReply(ctx, '🔎 Search Room\nPlease enter a room number like A01.', {
@@ -360,6 +458,38 @@ function setupBot() {
       }
 
       if (scope === 'tenant' && action === 'list') return showTenantsList(ctx, p1, Number(p2 || 1));
+      if (scope === 'request' && action === 'list') return showRequestList(ctx, p1, Number(p2 || 1));
+      if (scope === 'request' && action === 'view') {
+        const req = await rentalRequestService.getRequestById(p1);
+        if (!req) return safeEditOrReply(ctx, 'Request not found.');
+        const rows = [];
+        if (req.telegramUsername) rows.push([Markup.button.url('💬 Chat User', `https://t.me/${req.telegramUsername.replace('@', '')}`)]);
+        rows.push([Markup.button.callback('✅ Approve', callback(['request', 'approve', req._id])), Markup.button.callback('❌ Reject', callback(['request', 'reject', req._id]))]);
+        rows.push([Markup.button.callback('🔙 Back', callback(['request', 'list', req.status, '1']))]);
+        return safeEditOrReply(ctx, formatRentalRequestCard(req), { reply_markup: { inline_keyboard: rows } });
+      }
+      if (scope === 'request' && action === 'approve') {
+        const req = await rentalRequestService.updateRequestStatus(p1, 'approved', String(ctx.from.id));
+        if (req?.telegramChatId) {
+          await ctx.telegram.sendMessage(req.telegramChatId, `✅ Your request for room ${req.roomNumber} was approved.`);
+        }
+        return safeEditOrReply(ctx, 'Request approved. Do you want to assign this person now?', {
+          reply_markup: { inline_keyboard: [[Markup.button.callback('✅ Assign Now', callback(['request', 'assign', req._id])), Markup.button.callback('Later', callback(['request', 'view', req._id]))]] }
+        });
+      }
+      if (scope === 'request' && action === 'assign') {
+        const req = await rentalRequestService.getRequestById(p1);
+        if (!req) return safeEditOrReply(ctx, 'Request not found.');
+        startFlow(ctx, 'assign_tenant', 'moveIn', { roomNumber: req.roomNumber, fullName: req.fullName, phone: req.phone });
+        return safeEditOrReply(ctx, `Assigning ${req.fullName} to room ${req.roomNumber}.\nEnter move-in date (YYYY-MM-DD) or TODAY.`);
+      }
+      if (scope === 'request' && action === 'reject') {
+        const req = await rentalRequestService.updateRequestStatus(p1, 'rejected', String(ctx.from.id));
+        if (req?.telegramChatId) {
+          await ctx.telegram.sendMessage(req.telegramChatId, `❌ Your request for room ${req.roomNumber} was not approved.`);
+        }
+        return safeEditOrReply(ctx, 'Request rejected.');
+      }
       if (scope === 'tenant' && action === 'payqr') {
         const tenant = await tenantService.getTenantByChatId(ctx.chat.id);
         const payment = await paymentService.getPaymentById(p1);
@@ -555,6 +685,31 @@ function setupBot() {
           await tenantService.addTenantToRoom(data);
           clearFlow(ctx);
           return safeEditOrReply(ctx, 'Tenant assigned successfully.', { reply_markup: { inline_keyboard: [[Markup.button.callback('🔙 Rooms', 'panel:rooms')]] } });
+        }
+      }
+
+      if (ctx.session.flow === 'rental_request') {
+        if (ctx.session.step === 'name') {
+          data.fullName = text;
+          ctx.session.step = 'phone';
+          ctx.session.flowData = data;
+          return safeEditOrReply(ctx, 'Please enter your phone number.', { reply_markup: { inline_keyboard: [[Markup.button.callback('❌ Cancel', 'flow:cancel')]] } });
+        }
+        if (ctx.session.step === 'phone') {
+          data.phone = text;
+          ctx.session.step = 'note';
+          ctx.session.flowData = data;
+          return safeEditOrReply(ctx, 'Any message for the admin? (or tap Skip)', {
+            reply_markup: { inline_keyboard: [[Markup.button.callback('⏭ Skip', 'flow:skipnote'), Markup.button.callback('❌ Cancel', 'flow:cancel')]] }
+          });
+        }
+        if (ctx.session.step === 'note') {
+          data.note = text;
+          ctx.session.step = 'confirm';
+          ctx.session.flowData = data;
+          return safeEditOrReply(ctx, `📝 Rental Request\n━━━━━━━━━━\nRoom: ${data.roomNumber}\nName: ${data.fullName}\nPhone: ${data.phone}\nTelegram: @${ctx.from.username || '-'}\nNote: ${data.note || '-'}`, {
+            reply_markup: { inline_keyboard: [[Markup.button.callback('✅ Submit Request', 'flow:submitrequest'), Markup.button.callback('❌ Cancel', 'flow:cancel')]] }
+          });
         }
       }
 
