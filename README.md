@@ -13,6 +13,7 @@ Production-ready Node.js + Express + MongoDB + Telegraf bot for managing a 100-r
 - PayWay rent payment flow with QR (primary) and payment link (secondary)
 - Webhook-driven payment confirmation with tenant/admin notifications
 - Guest flow for room browsing and rental request submission
+- Settings control center with Admin & Roles, Room Management, and Reminder Tools
 
 ## Stack
 - Node.js
@@ -86,6 +87,12 @@ Guest (not linked and not admin):
 - Guests can submit rental requests with full name, phone, and optional note.
 - Admin receives instant notification with chat shortcut and approve/reject actions.
 - Admin can review requests from **📨 Requests** menu (pending/approved/rejected).
+
+## Settings control center
+- **👮 Admin & Roles**: view admins, roles, add admin, create role, edit permissions.
+- **🏗 Room Management**: create/edit/delete room, update photo, bulk create ranges.
+- **🔔 Reminder Tools**: run reminder now, preview dry-run results, view schedule.
+- Permission-aware actions for: `manage_admins`, `manage_roles`, `manage_rooms`, `delete_rooms`, `run_reminders`.
 
 ## PayWay payment flow
 1. Tenant opens **💳 My Payment**.

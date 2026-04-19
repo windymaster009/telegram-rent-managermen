@@ -8,6 +8,7 @@ const paymentService = require('../services/paymentService');
 const Room = require('../models/Room');
 const { runReminderCheckOnce, resendTenantReminder } = require('../jobs/reminderJob');
 const { getAdminMainMenu, getTenantMainMenu, getGuestMainMenu, getRoomsMenu, getPaymentsMenu, getTenantsMenu, getSettingsMenu, getRoomActions, getRequestMenu } = require('../keyboards/menus');
+const { getSettingsMainMenu, getAdminRolesMenu, getRoomManagementMenu, getReminderToolsMenu } = require('../keyboards/settingsKeyboards');
 const { paginate } = require('../utils/pagination');
 const { safeEditOrReply } = require('../utils/safeEditOrReply');
 const { formatRoomCard, formatTenantRoomCard, formatGuestRoomCard, formatRentalRequestCard, formatPaymentCard, formatTenantCard, formatDashboardCard, getSectionHeader } = require('../formatters/cards');
@@ -20,6 +21,9 @@ const { createQrPayment } = require('../services/paywayQrService');
 const { createPaymentLink } = require('../services/paywayLinkService');
 const { getTenantPaymentHistory } = require('../services/paymentHistoryService');
 const rentalRequestService = require('../services/rentalRequestService');
+const adminService = require('../services/adminService');
+const roleService = require('../services/roleService');
+const reminderService = require('../services/reminderService');
 
 function callback(parts) {
   return parts.join(':');
@@ -76,10 +80,36 @@ async function openTenantsPanel(ctx) {
   return renderPanel(ctx, '👥 Tenants\nChoose an option below:', getTenantsMenu());
 }
 async function openSettingsPanel(ctx) {
-  return renderPanel(ctx, '⚙️ Settings\nChoose an action:', getSettingsMenu());
+  return renderPanel(ctx, '⚙️ Settings\n━━━━━━━━━━\nManage admins, roles, room management, and reminder tools.', getSettingsMainMenu());
 }
 async function openRequestsPanel(ctx) {
   return renderPanel(ctx, '📨 Requests\nChoose an option below:', getRequestMenu());
+}
+
+async function openAdminRolesPanel(ctx) {
+  const [admins, roles, canManage] = await Promise.all([
+    adminService.listAdmins(),
+    roleService.listRoles(),
+    adminService.hasPermission(ctx.from.id, 'manage_admins')
+  ]);
+  return renderPanel(
+    ctx,
+    `👮 Admin & Roles\n━━━━━━━━━━\nTotal admins: ${admins.length}\nTotal roles: ${roles.length}`,
+    getAdminRolesMenu(canManage)
+  );
+}
+
+async function openRoomManagementPanel(ctx) {
+  const [canManageRooms, canDeleteRooms] = await Promise.all([
+    adminService.hasPermission(ctx.from.id, 'manage_rooms'),
+    adminService.hasPermission(ctx.from.id, 'delete_rooms')
+  ]);
+  return renderPanel(ctx, '🏗 Room Management\n━━━━━━━━━━\nCreate, edit, delete, and maintain rooms.', getRoomManagementMenu(canManageRooms, canDeleteRooms));
+}
+
+async function openReminderToolsPanel(ctx) {
+  const canRun = await adminService.hasPermission(ctx.from.id, 'run_reminders');
+  return renderPanel(ctx, '🔔 Reminder Tools\n━━━━━━━━━━\nTest and run payment reminder jobs.', getReminderToolsMenu(canRun));
 }
 
 async function showRoomList(ctx, type = 'all', page = 1) {
@@ -208,6 +238,7 @@ async function showDashboard(ctx, editMode = false) {
 function setupBot() {
   if (!env.telegramBotToken) return null;
   const bot = new Telegraf(env.telegramBotToken);
+  adminService.syncEnvAdmins().catch((e) => console.error('Admin sync failed', e.message));
 
   bot.use(session());
   bot.use((ctx, next) => {
@@ -375,6 +406,43 @@ function setupBot() {
           successRows.push([Markup.button.callback('🔙 Back', 'panel:home')]);
           return safeEditOrReply(ctx, '✅ Your rental request has been sent to the admin.\nWe will contact you soon.', { reply_markup: { inline_keyboard: successRows } });
         }
+      }
+      if (data.startsWith('flow:roleperm:')) {
+        if (ctx.session.flow !== 'create_role') return ctx.answerCbQuery();
+        const perm = data.split(':')[2];
+        const selected = ctx.session.flowData.permissions || [];
+        ctx.session.flowData.permissions = selected.includes(perm) ? selected.filter((p) => p !== perm) : [...selected, perm];
+        const rows = roleService.DEFAULT_PERMISSIONS.map((p) => [Markup.button.callback(`${ctx.session.flowData.permissions.includes(p) ? '✅' : '⬜'} ${p}`, callback(['flow', 'roleperm', p]))]);
+        rows.push([Markup.button.callback('💾 Save Role', 'flow:saverole')]);
+        return renderPanel(ctx, 'Select permissions (tap to toggle):', { reply_markup: { inline_keyboard: rows } });
+      }
+      if (data === 'flow:saverole') {
+        if (ctx.session.flow !== 'create_role') return ctx.answerCbQuery();
+        await roleService.createRole({
+          name: ctx.session.flowData.name,
+          description: ctx.session.flowData.description || '',
+          permissions: ctx.session.flowData.permissions || []
+        });
+        clearFlow(ctx);
+        return safeEditOrReply(ctx, 'Role created successfully.');
+      }
+      if (data.startsWith('flow:adminrole:')) {
+        if (ctx.session.flow !== 'add_admin') return ctx.answerCbQuery();
+        const roleId = data.split(':')[2];
+        await adminService.addAdmin({
+          telegramUserId: ctx.session.flowData.telegramUserId,
+          telegramUsername: ctx.session.flowData.telegramUsername,
+          roleId,
+          addedBy: String(ctx.from.id)
+        });
+        clearFlow(ctx);
+        return safeEditOrReply(ctx, 'Admin added successfully.');
+      }
+      if (data.startsWith('flow:editroom:')) {
+        if (ctx.session.flow !== 'edit_room') return ctx.answerCbQuery();
+        ctx.session.flowData.field = data.split(':')[2];
+        ctx.session.step = 'value';
+        return safeEditOrReply(ctx, `Enter new value for ${ctx.session.flowData.field}.`);
       }
       if (data === 'dashboard:refresh') return showDashboard(ctx, true);
       if (data === 'tenant:mypayment') return ctx.reply('Tap 💳 My Payment from main menu.');
@@ -554,19 +622,127 @@ function setupBot() {
         return showTenantsList(ctx, 'all', 1);
       }
 
-      if (scope === 'settings' && action === 'admins') return ctx.answerCbQuery(`Admins: ${env.adminTelegramIds.join(', ')}`);
-      if (scope === 'settings' && action === 'seed') {
-        const bulk = [];
-        for (let i = 1; i <= 100; i += 1) {
-          const roomNumber = String(i).padStart(3, '0');
-          bulk.push({ updateOne: { filter: { roomNumber }, update: { $setOnInsert: { roomNumber, status: 'free', rentPrice: 500, tenantId: null, notes: '' } }, upsert: true } });
-        }
-        await Room.bulkWrite(bulk);
-        return ctx.answerCbQuery('Rooms seeded');
+      if (scope === 'settings' && action === 'admins_roles') return openAdminRolesPanel(ctx);
+      if (scope === 'settings' && action === 'room_mgmt') return openRoomManagementPanel(ctx);
+      if (scope === 'settings' && action === 'reminder_tools') return openReminderToolsPanel(ctx);
+      if (scope === 'settings' && action === 'admins' && p1 === 'list') {
+        const admins = await adminService.listAdmins();
+        const rows = admins.map((a) => [Markup.button.callback(`${a.telegramUsername ? '@' + a.telegramUsername : 'No username'} • ${a.roleId?.name || '-'}`, callback(['settings', 'admins', 'view', a._id]))]);
+        rows.push([Markup.button.callback('🔙 Back', 'settings:admins_roles')]);
+        return renderPanel(ctx, '👤 Admins', { reply_markup: { inline_keyboard: rows } });
       }
-      if (scope === 'settings' && action === 'reminder') {
-        await runReminderCheckOnce(bot);
-        return ctx.answerCbQuery('Reminder check done');
+      if (scope === 'settings' && action === 'admins' && p1 === 'view') {
+        const admin = (await adminService.listAdmins()).find((a) => String(a._id) === String(p2));
+        if (!admin) return safeEditOrReply(ctx, 'Admin not found.');
+        return renderPanel(
+          ctx,
+          `👤 Admin Details\n━━━━━━━━━━\nUsername: ${admin.telegramUsername ? '@' + admin.telegramUsername : 'No username'}\nTelegram ID: ${admin.telegramUserId}\nRole: ${admin.roleId?.name || '-'}`,
+          { reply_markup: { inline_keyboard: [[Markup.button.callback('✏️ Change Role', callback(['settings', 'admins', 'changerole', admin._id]))], [Markup.button.callback('❌ Remove Admin', callback(['settings', 'admins', 'remove', admin._id]))], [Markup.button.callback('🔙 Back', 'settings:admins:list')]] } }
+        );
+      }
+      if (scope === 'settings' && action === 'admins' && p1 === 'add') {
+        if (!(await adminService.hasPermission(ctx.from.id, 'manage_admins'))) return ctx.answerCbQuery('No permission');
+        startFlow(ctx, 'add_admin', 'telegramId');
+        return safeEditOrReply(ctx, 'Enter Telegram user ID for new admin.');
+      }
+      if (scope === 'settings' && action === 'admins' && p1 === 'remove') {
+        if (!(await adminService.hasPermission(ctx.from.id, 'manage_admins'))) return ctx.answerCbQuery('No permission');
+        await adminService.removeAdmin(p2);
+        return safeEditOrReply(ctx, 'Admin removed.');
+      }
+      if (scope === 'settings' && action === 'admins' && p1 === 'changerole') {
+        if (!(await adminService.hasPermission(ctx.from.id, 'manage_admins'))) return ctx.answerCbQuery('No permission');
+        const roles = await roleService.listRoles();
+        const rows = roles.map((r) => [Markup.button.callback(r.name, callback(['settings', 'admins', 'setrole', p2, r._id]))]);
+        rows.push([Markup.button.callback('🔙 Back', callback(['settings', 'admins', 'view', p2]))]);
+        return renderPanel(ctx, 'Choose a new role:', { reply_markup: { inline_keyboard: rows } });
+      }
+      if (scope === 'settings' && action === 'admins' && p1 === 'setrole') {
+        if (!(await adminService.hasPermission(ctx.from.id, 'manage_admins'))) return ctx.answerCbQuery('No permission');
+        await adminService.changeRole(p2, data.split(':')[4]);
+        return safeEditOrReply(ctx, 'Role updated successfully.');
+      }
+      if (scope === 'settings' && action === 'roles' && p1 === 'list') {
+        const roles = await roleService.listRoles();
+        const rows = roles.map((r) => [Markup.button.callback(r.name, callback(['settings', 'roles', 'view', r._id]))]);
+        rows.push([Markup.button.callback('🔙 Back', 'settings:admins_roles')]);
+        return renderPanel(ctx, '🪪 Roles', { reply_markup: { inline_keyboard: rows } });
+      }
+      if (scope === 'settings' && action === 'roles' && p1 === 'view') {
+        const role = await roleService.getRoleById(p2);
+        if (!role) return safeEditOrReply(ctx, 'Role not found.');
+        const perms = roleService.DEFAULT_PERMISSIONS.map((perm) => `${role.permissions.includes(perm) ? '✅' : '❌'} ${perm}`).join('\n');
+        const rows = [[Markup.button.callback('✏️ Edit Permissions', callback(['settings', 'roles', 'edit', role._id]))]];
+        if (!role.isSystemRole) rows.push([Markup.button.callback('❌ Delete Role', callback(['settings', 'roles', 'delete', role._id]))]);
+        rows.push([Markup.button.callback('🔙 Back', 'settings:roles:list')]);
+        return renderPanel(ctx, `🪪 Role: ${role.name}\n━━━━━━━━━━\nPermissions:\n${perms}`, { reply_markup: { inline_keyboard: rows } });
+      }
+      if (scope === 'settings' && action === 'roles' && p1 === 'create') {
+        if (!(await adminService.hasPermission(ctx.from.id, 'manage_roles'))) return ctx.answerCbQuery('No permission');
+        startFlow(ctx, 'create_role', 'name', { permissions: [] });
+        return safeEditOrReply(ctx, 'Enter role name.');
+      }
+      if (scope === 'settings' && action === 'roles' && p1 === 'delete') {
+        if (!(await adminService.hasPermission(ctx.from.id, 'manage_roles'))) return ctx.answerCbQuery('No permission');
+        await roleService.deleteRole(p2);
+        return safeEditOrReply(ctx, 'Role deleted.');
+      }
+      if (scope === 'settings' && action === 'roles' && p1 === 'edit') {
+        if (!(await adminService.hasPermission(ctx.from.id, 'manage_roles'))) return ctx.answerCbQuery('No permission');
+        const role = await roleService.getRoleById(p2);
+        if (!role) return safeEditOrReply(ctx, 'Role not found.');
+        startFlow(ctx, 'edit_role_permissions', 'select', { roleId: role._id, permissions: [...role.permissions] });
+        const rows = roleService.DEFAULT_PERMISSIONS.map((perm) => [Markup.button.callback(`${role.permissions.includes(perm) ? '✅' : '⬜'} ${perm}`, callback(['settings', 'roleperm', role._id, perm]))]);
+        rows.push([Markup.button.callback('💾 Save', callback(['settings', 'roleperm_save', role._id]))]);
+        return renderPanel(ctx, `Select permissions for ${role.name}:`, { reply_markup: { inline_keyboard: rows } });
+      }
+      if (scope === 'settings' && action === 'roleperm') {
+        const [,,,, perm] = data.split(':');
+        const role = await roleService.getRoleById(p2);
+        if (!role) return safeEditOrReply(ctx, 'Role not found.');
+        role.permissions = role.permissions.includes(perm) ? role.permissions.filter((x) => x !== perm) : [...role.permissions, perm];
+        await role.save();
+        const rows = roleService.DEFAULT_PERMISSIONS.map((p) => [Markup.button.callback(`${role.permissions.includes(p) ? '✅' : '⬜'} ${p}`, callback(['settings', 'roleperm', role._id, p]))]);
+        rows.push([Markup.button.callback('💾 Save', callback(['settings', 'roleperm_save', role._id]))]);
+        return renderPanel(ctx, `Select permissions for ${role.name}:`, { reply_markup: { inline_keyboard: rows } });
+      }
+      if (scope === 'settings' && action === 'roleperm_save') return safeEditOrReply(ctx, 'Permissions saved.');
+      if (scope === 'settings' && action === 'room' && p1 === 'create') {
+        if (!(await adminService.hasPermission(ctx.from.id, 'manage_rooms'))) return ctx.answerCbQuery('No permission');
+        startFlow(ctx, 'add_room', 'room');
+        return safeEditOrReply(ctx, 'Enter room number.');
+      }
+      if (scope === 'settings' && action === 'room' && p1 === 'bulk') {
+        if (!(await adminService.hasPermission(ctx.from.id, 'manage_rooms'))) return ctx.answerCbQuery('No permission');
+        startFlow(ctx, 'bulk_create_rooms', 'prefix', {});
+        return safeEditOrReply(ctx, 'Enter room prefix (e.g., A, F).');
+      }
+      if (scope === 'settings' && action === 'room' && p1 === 'delete') {
+        if (!(await adminService.hasPermission(ctx.from.id, 'delete_rooms'))) return ctx.answerCbQuery('No permission');
+        startFlow(ctx, 'delete_room', 'roomNumber', {});
+        return safeEditOrReply(ctx, 'Enter room number to delete.');
+      }
+      if (scope === 'settings' && action === 'room' && p1 === 'photo') {
+        if (!(await adminService.hasPermission(ctx.from.id, 'manage_rooms'))) return ctx.answerCbQuery('No permission');
+        startFlow(ctx, 'update_room_photo_manual', 'roomNumber', {});
+        return safeEditOrReply(ctx, 'Enter room number to update photo.');
+      }
+      if (scope === 'settings' && action === 'room' && p1 === 'edit') {
+        if (!(await adminService.hasPermission(ctx.from.id, 'manage_rooms'))) return ctx.answerCbQuery('No permission');
+        startFlow(ctx, 'edit_room', 'roomNumber', {});
+        return safeEditOrReply(ctx, 'Enter room number to edit.');
+      }
+      if (scope === 'settings' && action === 'reminder' && p1 === 'run') {
+        if (!(await adminService.hasPermission(ctx.from.id, 'run_reminders'))) return ctx.answerCbQuery('No permission');
+        const result = await reminderService.runReminderNow(bot);
+        return renderPanel(ctx, `⚡ Reminder Run Complete\n━━━━━━━━━━\nPayments checked: ${result.checked}\n3-day reminders sent: ${result.threeDaysBefore}\nDue today reminders sent: ${result.dueToday}\nOverdue admin alerts sent: ${result.overdue}`);
+      }
+      if (scope === 'settings' && action === 'reminder' && p1 === 'preview') {
+        const preview = await reminderService.previewReminderResults();
+        return renderPanel(ctx, `📋 Reminder Preview\n━━━━━━━━━━\n3 days before due: ${preview.threeDaysBefore}\nDue today: ${preview.dueToday}\nOverdue: ${preview.overdue}\n\nWould notify ${preview.wouldNotifyTenants} tenants and ${preview.wouldNotifyAdmins} admin alerts.`);
+      }
+      if (scope === 'settings' && action === 'reminder' && p1 === 'schedule') {
+        return renderPanel(ctx, `⏰ Reminder Schedule\n━━━━━━━━━━\nCron: ${env.reminderCron}\nTimezone: ${env.timezone}\nMeaning: every day at 9:00 AM`);
       }
 
       return ctx.answerCbQuery('Action not available');
@@ -703,6 +879,119 @@ function setupBot() {
           return safeEditOrReply(ctx, `📝 Rental Request\n━━━━━━━━━━\nRoom: ${data.roomNumber}\nName: ${data.fullName}\nPhone: ${data.phone}\nTelegram: @${ctx.from.username || '-'}\nNote: ${data.note || '-'}`, {
             reply_markup: { inline_keyboard: [[Markup.button.callback('✅ Submit Request', 'flow:submitrequest'), Markup.button.callback('❌ Cancel', 'flow:cancel')]] }
           });
+        }
+      }
+
+      if (ctx.session.flow === 'create_role') {
+        if (ctx.session.step === 'name') {
+          data.name = text;
+          ctx.session.step = 'description';
+          ctx.session.flowData = data;
+          return safeEditOrReply(ctx, 'Enter role description (or type SKIP).');
+        }
+        if (ctx.session.step === 'description') {
+          data.description = text.toUpperCase() === 'SKIP' ? '' : text;
+          ctx.session.step = 'permissions';
+          ctx.session.flowData = data;
+          const rows = roleService.DEFAULT_PERMISSIONS.map((perm) => [Markup.button.callback(`⬜ ${perm}`, callback(['flow', 'roleperm', perm]))]);
+          rows.push([Markup.button.callback('💾 Save Role', 'flow:saverole')]);
+          return renderPanel(ctx, 'Select permissions (tap to toggle):', { reply_markup: { inline_keyboard: rows } });
+        }
+      }
+
+      if (ctx.session.flow === 'add_admin') {
+        if (ctx.session.step === 'telegramId') {
+          data.telegramUserId = text;
+          ctx.session.step = 'username';
+          ctx.session.flowData = data;
+          return safeEditOrReply(ctx, 'Enter username (or type SKIP).');
+        }
+        if (ctx.session.step === 'username') {
+          data.telegramUsername = text.toUpperCase() === 'SKIP' ? null : text.replace('@', '');
+          const roles = await roleService.listRoles();
+          const rows = roles.map((r) => [Markup.button.callback(r.name, callback(['flow', 'adminrole', r._id]))]);
+          return renderPanel(ctx, 'Choose role:', { reply_markup: { inline_keyboard: rows } });
+        }
+      }
+
+      if (ctx.session.flow === 'bulk_create_rooms') {
+        if (ctx.session.step === 'prefix') {
+          data.prefix = text.toUpperCase();
+          ctx.session.step = 'start';
+          ctx.session.flowData = data;
+          return safeEditOrReply(ctx, 'Enter start number.');
+        }
+        if (ctx.session.step === 'start') {
+          data.start = Number(text);
+          ctx.session.step = 'end';
+          ctx.session.flowData = data;
+          return safeEditOrReply(ctx, 'Enter end number.');
+        }
+        if (ctx.session.step === 'end') {
+          data.end = Number(text);
+          ctx.session.step = 'rent';
+          ctx.session.flowData = data;
+          return safeEditOrReply(ctx, 'Enter default rent price.');
+        }
+        if (ctx.session.step === 'rent') {
+          const rentPrice = Number(text);
+          let created = 0;
+          for (let i = data.start; i <= data.end; i += 1) {
+            const roomNumber = `${data.prefix}${String(i).padStart(2, '0')}`;
+            try {
+              await roomService.addRoom({ roomNumber, rentPrice, notes: '' });
+              created += 1;
+            } catch (_) {}
+          }
+          clearFlow(ctx);
+          return safeEditOrReply(ctx, `Bulk creation completed. Created ${created} rooms.`);
+        }
+      }
+
+      if (ctx.session.flow === 'delete_room') {
+        if (ctx.session.step === 'roomNumber') {
+          const room = await roomService.getRoomByNumber(text);
+          if (!room) return safeEditOrReply(ctx, 'Room not found.');
+          if (room.status === 'rented') return safeEditOrReply(ctx, 'Cannot delete room with active tenant.');
+          data.roomId = room._id;
+          data.roomNumber = room.roomNumber;
+          ctx.session.step = 'confirm';
+          ctx.session.flowData = data;
+          return safeEditOrReply(ctx, `⚠️ Delete Room\n━━━━━━━━━━\nRoom: ${room.roomNumber}\nStatus: ${room.status}\nThis action cannot be undone.\nType DELETE to confirm.`);
+        }
+        if (ctx.session.step === 'confirm') {
+          if (text !== 'DELETE') return safeEditOrReply(ctx, 'Type DELETE to confirm.');
+          await Room.findByIdAndDelete(data.roomId);
+          clearFlow(ctx);
+          return safeEditOrReply(ctx, 'Room deleted successfully.');
+        }
+      }
+
+      if (ctx.session.flow === 'update_room_photo_manual' && ctx.session.step === 'roomNumber') {
+        const room = await roomService.getRoomByNumber(text);
+        if (!room) return safeEditOrReply(ctx, 'Room not found.');
+        ctx.session.flowData.roomId = room._id;
+        ctx.session.flow = 'update_room_photo';
+        ctx.session.step = 'photo';
+        return safeEditOrReply(ctx, `Send a new photo for room ${room.roomNumber}.`);
+      }
+
+      if (ctx.session.flow === 'edit_room') {
+        if (ctx.session.step === 'roomNumber') {
+          const room = await roomService.getRoomByNumber(text);
+          if (!room) return safeEditOrReply(ctx, 'Room not found.');
+          ctx.session.flowData = { roomId: room._id, roomNumber: room.roomNumber };
+          ctx.session.step = 'field';
+          return renderPanel(ctx, 'Choose field to edit:', { reply_markup: { inline_keyboard: [[Markup.button.callback('Room Number', 'flow:editroom:roomNumber')], [Markup.button.callback('Rent Price', 'flow:editroom:rentPrice')], [Markup.button.callback('Notes', 'flow:editroom:notes')]] } });
+        }
+        if (ctx.session.step === 'value') {
+          const room = await roomService.getRoomById(ctx.session.flowData.roomId);
+          if (ctx.session.flowData.field === 'roomNumber') room.roomNumber = text;
+          if (ctx.session.flowData.field === 'rentPrice') room.rentPrice = Number(text);
+          if (ctx.session.flowData.field === 'notes') room.notes = text;
+          await room.save();
+          clearFlow(ctx);
+          return safeEditOrReply(ctx, 'Room updated successfully.');
         }
       }
 

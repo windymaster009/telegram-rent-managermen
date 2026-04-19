@@ -25,7 +25,6 @@ function getRoomsMenu() {
   return Markup.inlineKeyboard([
     [Markup.button.callback('📋 All', 'rooms:list:all:1'), Markup.button.callback('🟢 Free', 'rooms:list:free:1')],
     [Markup.button.callback('🔴 Rented', 'rooms:list:rented:1'), Markup.button.callback('🔎 Search', 'rooms:search:start')],
-    [Markup.button.callback('➕ Add', 'rooms:add:start')],
     [Markup.button.callback('🔙 Back', 'panel:home')]
   ]);
 }
