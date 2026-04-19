@@ -26,7 +26,8 @@ async function getAdminByTelegramId(telegramUserId) {
 
 async function addAdmin(payload) {
   await syncEnvAdmins();
-  return AdminAssignment.create({ ...payload, telegramUserId: String(payload.telegramUserId) });
+  const telegramUserId = payload.telegramUserId ? String(payload.telegramUserId) : null;
+  return AdminAssignment.create({ ...payload, telegramUserId });
 }
 
 async function changeRole(adminId, roleId) {
@@ -44,6 +45,10 @@ async function removeAdmin(adminId) {
   await AdminAssignment.findByIdAndDelete(adminId);
 }
 
+async function updateAdmin(adminId, updates) {
+  return AdminAssignment.findByIdAndUpdate(adminId, updates, { new: true }).populate('roleId');
+}
+
 async function hasPermission(telegramUserId, permission) {
   const admin = await getAdminByTelegramId(telegramUserId);
   if (!admin) return false;
@@ -51,4 +56,4 @@ async function hasPermission(telegramUserId, permission) {
   return admin.roleId?.permissions?.includes(permission);
 }
 
-module.exports = { syncEnvAdmins, listAdmins, getAdminByTelegramId, addAdmin, changeRole, removeAdmin, hasPermission };
+module.exports = { syncEnvAdmins, listAdmins, getAdminByTelegramId, addAdmin, changeRole, removeAdmin, updateAdmin, hasPermission };

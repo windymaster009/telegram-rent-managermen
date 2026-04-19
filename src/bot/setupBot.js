@@ -157,6 +157,16 @@ async function showRequestList(ctx, status = 'pending', page = 1) {
   return renderPanel(ctx, `📨 ${status[0].toUpperCase()}${status.slice(1)} Requests`, { reply_markup: { inline_keyboard: rows } });
 }
 
+async function showRoomPickerForSettings(ctx, action, page = 1) {
+  const rooms = await roomService.listRooms();
+  if (!rooms.length) return renderPanel(ctx, 'No rooms available.');
+  const p = paginate(rooms, page, 6);
+  const rows = p.data.map((room) => [Markup.button.callback(`${room.roomNumber} ${room.status === 'rented' ? '🔴' : '🟢'}`, callback(['settings', 'roomselect', action, room._id]))]);
+  rows.push(getPaginationRow(callback(['settings', 'roompicker', action]), p.currentPage, p.totalPages));
+  rows.push([Markup.button.callback('🔙 Back', 'settings:room_mgmt')]);
+  return renderPanel(ctx, `Select a room for ${action}:`, { reply_markup: { inline_keyboard: rows } });
+}
+
 async function showRoomCard(ctx, roomId) {
   const room = await roomService.getRoomById(roomId);
   if (!room) return safeEditOrReply(ctx, 'Room not found.', { reply_markup: { inline_keyboard: [[Markup.button.callback('🔙 Rooms', 'panel:rooms')]] } });
@@ -432,6 +442,7 @@ function setupBot() {
         await adminService.addAdmin({
           telegramUserId: ctx.session.flowData.telegramUserId,
           telegramUsername: ctx.session.flowData.telegramUsername,
+          fullName: ctx.session.flowData.fullName || '',
           roleId,
           addedBy: String(ctx.from.id)
         });
@@ -636,14 +647,19 @@ function setupBot() {
         if (!admin) return safeEditOrReply(ctx, 'Admin not found.');
         return renderPanel(
           ctx,
-          `👤 Admin Details\n━━━━━━━━━━\nUsername: ${admin.telegramUsername ? '@' + admin.telegramUsername : 'No username'}\nTelegram ID: ${admin.telegramUserId}\nRole: ${admin.roleId?.name || '-'}`,
-          { reply_markup: { inline_keyboard: [[Markup.button.callback('✏️ Change Role', callback(['settings', 'admins', 'changerole', admin._id]))], [Markup.button.callback('❌ Remove Admin', callback(['settings', 'admins', 'remove', admin._id]))], [Markup.button.callback('🔙 Back', 'settings:admins:list')]] } }
+          `👤 Admin Details\n━━━━━━━━━━\nName: ${admin.fullName || '-'}\nUsername: ${admin.telegramUsername ? '@' + admin.telegramUsername : 'No username'}\nTelegram ID: ${admin.telegramUserId || 'Not linked yet'}\nRole: ${admin.roleId?.name || '-'}`,
+          { reply_markup: { inline_keyboard: [[Markup.button.callback('✏️ Edit Name', callback(['settings', 'admins', 'editname', admin._id]))], [Markup.button.callback('✏️ Change Role', callback(['settings', 'admins', 'changerole', admin._id]))], [Markup.button.callback('❌ Remove Admin', callback(['settings', 'admins', 'remove', admin._id]))], [Markup.button.callback('🔙 Back', 'settings:admins:list')]] } }
         );
       }
       if (scope === 'settings' && action === 'admins' && p1 === 'add') {
         if (!(await adminService.hasPermission(ctx.from.id, 'manage_admins'))) return ctx.answerCbQuery('No permission');
-        startFlow(ctx, 'add_admin', 'telegramId');
-        return safeEditOrReply(ctx, 'Enter Telegram user ID for new admin.');
+        startFlow(ctx, 'add_admin', 'username');
+        return safeEditOrReply(ctx, 'Enter admin username (example: @nhimkevin).');
+      }
+      if (scope === 'settings' && action === 'admins' && p1 === 'editname') {
+        if (!(await adminService.hasPermission(ctx.from.id, 'manage_admins'))) return ctx.answerCbQuery('No permission');
+        startFlow(ctx, 'edit_admin_name', 'fullName', { adminId: p2 });
+        return safeEditOrReply(ctx, 'Enter admin full name.');
       }
       if (scope === 'settings' && action === 'admins' && p1 === 'remove') {
         if (!(await adminService.hasPermission(ctx.from.id, 'manage_admins'))) return ctx.answerCbQuery('No permission');
@@ -719,18 +735,34 @@ function setupBot() {
       }
       if (scope === 'settings' && action === 'room' && p1 === 'delete') {
         if (!(await adminService.hasPermission(ctx.from.id, 'delete_rooms'))) return ctx.answerCbQuery('No permission');
-        startFlow(ctx, 'delete_room', 'roomNumber', {});
-        return safeEditOrReply(ctx, 'Enter room number to delete.');
+        return showRoomPickerForSettings(ctx, 'delete', 1);
       }
       if (scope === 'settings' && action === 'room' && p1 === 'photo') {
         if (!(await adminService.hasPermission(ctx.from.id, 'manage_rooms'))) return ctx.answerCbQuery('No permission');
-        startFlow(ctx, 'update_room_photo_manual', 'roomNumber', {});
-        return safeEditOrReply(ctx, 'Enter room number to update photo.');
+        return showRoomPickerForSettings(ctx, 'photo', 1);
       }
       if (scope === 'settings' && action === 'room' && p1 === 'edit') {
         if (!(await adminService.hasPermission(ctx.from.id, 'manage_rooms'))) return ctx.answerCbQuery('No permission');
-        startFlow(ctx, 'edit_room', 'roomNumber', {});
-        return safeEditOrReply(ctx, 'Enter room number to edit.');
+        return showRoomPickerForSettings(ctx, 'edit', 1);
+      }
+      if (scope === 'settings' && action === 'roompicker') return showRoomPickerForSettings(ctx, p1, Number(p2 || 1));
+      if (scope === 'settings' && action === 'roomselect') {
+        const [,,, mode, roomId] = data.split(':');
+        const room = await roomService.getRoomById(roomId);
+        if (!room) return safeEditOrReply(ctx, 'Room not found.');
+        if (mode === 'delete') {
+          if (room.status === 'rented') return safeEditOrReply(ctx, 'Cannot delete room with active tenant.');
+          startFlow(ctx, 'delete_room', 'confirm', { roomId: room._id, roomNumber: room.roomNumber });
+          return renderPanel(ctx, `⚠️ Delete Room\n━━━━━━━━━━\nRoom: ${room.roomNumber}\nStatus: ${room.status}\nThis action cannot be undone.`, { reply_markup: { inline_keyboard: [[Markup.button.callback('🗑 Confirm Delete', 'flow:confirmdelete'), Markup.button.callback('❌ Cancel', 'flow:cancel')]] } });
+        }
+        if (mode === 'photo') {
+          startFlow(ctx, 'update_room_photo', 'photo', { roomId: room._id });
+          return safeEditOrReply(ctx, `Send a new photo for room ${room.roomNumber}.`);
+        }
+        if (mode === 'edit') {
+          startFlow(ctx, 'edit_room', 'field', { roomId: room._id, roomNumber: room.roomNumber });
+          return renderPanel(ctx, 'Choose field to edit:', { reply_markup: { inline_keyboard: [[Markup.button.callback('Room Number', 'flow:editroom:roomNumber')], [Markup.button.callback('Rent Price', 'flow:editroom:rentPrice')], [Markup.button.callback('Notes', 'flow:editroom:notes')], [Markup.button.callback('🔙 Back', 'settings:room_mgmt')]] } });
+        }
       }
       if (scope === 'settings' && action === 'reminder' && p1 === 'run') {
         if (!(await adminService.hasPermission(ctx.from.id, 'run_reminders'))) return ctx.answerCbQuery('No permission');
@@ -900,18 +932,24 @@ function setupBot() {
       }
 
       if (ctx.session.flow === 'add_admin') {
-        if (ctx.session.step === 'telegramId') {
-          data.telegramUserId = text;
-          ctx.session.step = 'username';
-          ctx.session.flowData = data;
-          return safeEditOrReply(ctx, 'Enter username (or type SKIP).');
-        }
         if (ctx.session.step === 'username') {
           data.telegramUsername = text.toUpperCase() === 'SKIP' ? null : text.replace('@', '');
+          ctx.session.step = 'fullName';
+          ctx.session.flowData = data;
+          return safeEditOrReply(ctx, 'Enter admin full name (or type SKIP).');
+        }
+        if (ctx.session.step === 'fullName') {
+          data.fullName = text.toUpperCase() === 'SKIP' ? '' : text;
           const roles = await roleService.listRoles();
           const rows = roles.map((r) => [Markup.button.callback(r.name, callback(['flow', 'adminrole', r._id]))]);
           return renderPanel(ctx, 'Choose role:', { reply_markup: { inline_keyboard: rows } });
         }
+      }
+
+      if (ctx.session.flow === 'edit_admin_name' && ctx.session.step === 'fullName') {
+        await adminService.updateAdmin(ctx.session.flowData.adminId, { fullName: text });
+        clearFlow(ctx);
+        return safeEditOrReply(ctx, 'Admin name updated successfully.');
       }
 
       if (ctx.session.flow === 'bulk_create_rooms') {
