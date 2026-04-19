@@ -69,6 +69,7 @@ Guest (not linked and not admin):
 - Rooms / Payments / Tenants / Settings use compact inline menus
 - Pagination and drill-down views edit the same panel message when possible
 - Back returns to previous panel; Cancel is used for active input flows only
+- Bot tracks one active panel per user and replaces/clears old submenu panels to reduce chat clutter
 
 ### Card-style formatting
 - Room card with grouped blocks: status, tenant, stay info, payment

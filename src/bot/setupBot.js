@@ -12,6 +12,7 @@ const { paginate } = require('../utils/pagination');
 const { safeEditOrReply } = require('../utils/safeEditOrReply');
 const { formatRoomCard, formatTenantRoomCard, formatGuestRoomCard, formatRentalRequestCard, formatPaymentCard, formatTenantCard, formatDashboardCard, getSectionHeader } = require('../formatters/cards');
 const { chunkTwoColumns, getPaginationRow } = require('../navigation/panels');
+const { renderTextPanel, renderPhotoPanel, clearActivePanel } = require('../navigation/panelManager');
 const { clearFlow, startFlow } = require('../flows/state');
 const { formatMoney } = require('../utils/format');
 const { formatDate, daysBetween } = require('../utils/date');
@@ -33,14 +34,12 @@ async function sendRoomDetailCard(ctx, room, caption, actions) {
   if (room.photoFileId || room.photoUrl) {
     const photo = room.photoFileId || room.photoUrl;
     try {
-      const sent = await ctx.replyWithPhoto(photo, { caption, ...actions });
-      ctx.session.panelMessageId = sent.message_id;
-      return sent;
+      return await renderPhotoPanel(ctx, photo, caption, actions);
     } catch (_) {
-      return ctx.reply(caption, actions);
+      return renderTextPanel(ctx, caption, actions);
     }
   }
-  return ctx.reply(`ℹ️ No photo available\n\n${caption}`, actions);
+  return renderTextPanel(ctx, `ℹ️ No photo available\n\n${caption}`, actions);
 }
 
 async function sendRoomCard(ctx, room, tenant, payment) {
@@ -48,22 +47,11 @@ async function sendRoomCard(ctx, room, tenant, payment) {
 }
 
 async function renderPanel(ctx, text, keyboard) {
-  const chatId = ctx.chat?.id || ctx.update?.callback_query?.message?.chat?.id;
-  if (!chatId) return safeEditOrReply(ctx, text, keyboard);
-
-  const messageId = ctx.session.panelMessageId;
-  if (messageId) {
-    try {
-      await ctx.telegram.editMessageText(chatId, messageId, null, text, keyboard);
-      return;
-    } catch (_) {}
-  }
-
-  const sent = await ctx.reply(text, keyboard);
-  ctx.session.panelMessageId = sent.message_id;
+  return renderTextPanel(ctx, text, keyboard);
 }
 
 async function showHome(ctx) {
+  await clearActivePanel(ctx);
   if (isAdminTelegramId(ctx.from.id)) {
     await ctx.reply('Choose an option below.', getAdminMainMenu());
     return;
@@ -223,6 +211,9 @@ function setupBot() {
   bot.use((ctx, next) => {
     ctx.session ??= {};
     ctx.session.flowData ??= {};
+    ctx.session.activePanelChatId ??= null;
+    ctx.session.activePanelMessageId ??= null;
+    ctx.session.activePanelKind ??= null;
     return next();
   });
 
