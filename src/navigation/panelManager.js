@@ -27,9 +27,25 @@ function setActivePanel(ctx, { chatId, messageId, kind }) {
 
 async function renderTextPanel(ctx, text, extra = {}) {
   const chatId = ctx.chat?.id || ctx.update?.callback_query?.message?.chat?.id;
+  const callbackChatId = ctx.update?.callback_query?.message?.chat?.id;
+  const callbackMessageId = ctx.update?.callback_query?.message?.message_id;
   const activeChatId = ctx.session.activePanelChatId;
   const activeMessageId = ctx.session.activePanelMessageId;
   const activeKind = ctx.session.activePanelKind;
+
+  if (callbackChatId && callbackMessageId) {
+    try {
+      await ctx.telegram.editMessageText(callbackChatId, Number(callbackMessageId), null, text, extra);
+      setActivePanel(ctx, { chatId: callbackChatId, messageId: callbackMessageId, kind: 'text' });
+      return { chatId: callbackChatId, messageId: callbackMessageId };
+    } catch (error) {
+      const msg = String(error?.description || error?.message || '').toLowerCase();
+      if (msg.includes('message is not modified')) {
+        setActivePanel(ctx, { chatId: callbackChatId, messageId: callbackMessageId, kind: 'text' });
+        return { chatId: callbackChatId, messageId: callbackMessageId };
+      }
+    }
+  }
 
   if (activeChatId && activeMessageId && activeKind === 'text') {
     try {
@@ -50,9 +66,17 @@ async function renderTextPanel(ctx, text, extra = {}) {
 }
 
 async function renderPhotoPanel(ctx, photo, caption, extra = {}) {
+  const callbackChatId = ctx.update?.callback_query?.message?.chat?.id;
+  const callbackMessageId = ctx.update?.callback_query?.message?.message_id;
   const activeChatId = ctx.session.activePanelChatId;
   const activeMessageId = ctx.session.activePanelMessageId;
   const activeKind = ctx.session.activePanelKind;
+
+  if (callbackChatId && callbackMessageId) {
+    try {
+      await ctx.telegram.deleteMessage(callbackChatId, Number(callbackMessageId));
+    } catch (_) {}
+  }
 
   if (activeChatId && activeMessageId) {
     if (activeKind === 'photo') {

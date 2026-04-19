@@ -638,7 +638,10 @@ function setupBot() {
       if (scope === 'settings' && action === 'reminder_tools') return openReminderToolsPanel(ctx);
       if (scope === 'settings' && action === 'admins' && p1 === 'list') {
         const admins = await adminService.listAdmins();
-        const rows = admins.map((a) => [Markup.button.callback(`${a.telegramUsername ? '@' + a.telegramUsername : 'No username'} • ${a.roleId?.name || '-'}`, callback(['settings', 'admins', 'view', a._id]))]);
+        const rows = admins.map((a) => {
+          const displayName = a.fullName || (a.telegramUsername ? `@${a.telegramUsername}` : 'Unnamed admin');
+          return [Markup.button.callback(`${displayName} • ${a.roleId?.name || '-'}`, callback(['settings', 'admins', 'view', a._id]))];
+        });
         rows.push([Markup.button.callback('🔙 Back', 'settings:admins_roles')]);
         return renderPanel(ctx, '👤 Admins', { reply_markup: { inline_keyboard: rows } });
       }
@@ -647,7 +650,7 @@ function setupBot() {
         if (!admin) return safeEditOrReply(ctx, 'Admin not found.');
         return renderPanel(
           ctx,
-          `👤 Admin Details\n━━━━━━━━━━\nName: ${admin.fullName || '-'}\nUsername: ${admin.telegramUsername ? '@' + admin.telegramUsername : 'No username'}\nTelegram ID: ${admin.telegramUserId || 'Not linked yet'}\nRole: ${admin.roleId?.name || '-'}`,
+          `👤 Admin Profile\n==========\nName: ${admin.fullName || '-'}\nUsername: ${admin.telegramUsername ? '@' + admin.telegramUsername : 'No username'}\nTelegram ID: ${admin.telegramUserId || 'Not linked yet'}\nRole: ${admin.roleId?.name || '-'}\n----------\nChat link: ${admin.telegramUsername ? `https://t.me/${admin.telegramUsername}` : 'No public username'}\nUser link: ${admin.telegramUserId ? `tg://user?id=${admin.telegramUserId}` : 'Not linked yet'}`,
           { reply_markup: { inline_keyboard: [[Markup.button.callback('✏️ Edit Name', callback(['settings', 'admins', 'editname', admin._id]))], [Markup.button.callback('✏️ Change Role', callback(['settings', 'admins', 'changerole', admin._id]))], [Markup.button.callback('❌ Remove Admin', callback(['settings', 'admins', 'remove', admin._id]))], [Markup.button.callback('🔙 Back', 'settings:admins:list')]] } }
         );
       }

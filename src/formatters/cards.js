@@ -3,23 +3,24 @@ const { formatDate, daysBetween } = require('../utils/date');
 const { formatMoney } = require('../utils/format');
 
 function getSectionHeader(title, emoji) {
-  return `${emoji} ${title}\n━━━━━━━━━━`;
+  return `${emoji} ${title}\n==========`;
 }
 
 function formatRoomCard(room, tenant, payment) {
   const lines = [
     getSectionHeader(`Room ${room.roomNumber}`, '🏠'),
     `Status: ${room.status === 'rented' ? '🔴 Rented' : '🟢 Free'}`,
-    `Rent: ${formatMoney(room.rentPrice)}`
+    `Rent: ${formatMoney(room.rentPrice)}`,
+    '----------'
   ];
 
   if (tenant) {
-    lines.push('', '👤 Tenant', `Name: ${tenant.fullName}`, `Phone: ${tenant.phone || '-'}`);
-    lines.push('', '📅 Stay info', `Move-in: ${formatDate(tenant.moveInDate)}`, `Days stayed: ${daysBetween(tenant.moveInDate)}`);
+    lines.push('👤 Tenant', `Name: ${tenant.fullName}`, `Phone: ${tenant.phone || '-'}`, '----------');
+    lines.push('📅 Stay info', `Move-in: ${formatDate(tenant.moveInDate)}`, `Days stayed: ${daysBetween(tenant.moveInDate)}`);
   }
 
   if (payment && tenant) {
-    lines.push('', '💳 Payment', `Status: ${payment.status}`, `Due date: ${formatDate(payment.dueDate)}`);
+    lines.push('----------', '💳 Payment', `Status: ${payment.status}`, `Due date: ${formatDate(payment.dueDate)}`);
   }
 
   return lines.join('\n');
@@ -47,7 +48,7 @@ function formatGuestRoomCard(room) {
     getSectionHeader(`Room ${room.roomNumber}`, '🏠'),
     'Status: 🟢 Available',
     `Rent: ${formatMoney(room.rentPrice)}`,
-    '',
+    '----------',
     '📝 Details',
     `Room number: ${room.roomNumber}`,
     'Availability: Ready to rent',
