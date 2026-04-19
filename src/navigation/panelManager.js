@@ -10,6 +10,15 @@ async function clearActivePanel(ctx) {
   ctx.session.activePanelKind = null;
 }
 
+async function replaceActivePanel(ctx, renderFn) {
+  try {
+    return await renderFn();
+  } catch (error) {
+    try { await clearActivePanel(ctx); } catch (_) {}
+    return renderFn();
+  }
+}
+
 function setActivePanel(ctx, { chatId, messageId, kind }) {
   ctx.session.activePanelChatId = chatId;
   ctx.session.activePanelMessageId = messageId;
@@ -28,9 +37,8 @@ async function renderTextPanel(ctx, text, extra = {}) {
       return { chatId: activeChatId, messageId: activeMessageId };
     } catch (error) {
       const msg = String(error?.description || error?.message || '').toLowerCase();
-      if (!msg.includes('message is not modified')) {
-        try { await ctx.telegram.deleteMessage(activeChatId, Number(activeMessageId)); } catch (_) {}
-      }
+      if (msg.includes('message is not modified')) return { chatId: activeChatId, messageId: activeMessageId };
+      try { await ctx.telegram.deleteMessage(activeChatId, Number(activeMessageId)); } catch (_) {}
     }
   } else if (activeChatId && activeMessageId && activeKind && activeKind !== 'text') {
     try { await ctx.telegram.deleteMessage(activeChatId, Number(activeMessageId)); } catch (_) {}
@@ -52,6 +60,8 @@ async function renderPhotoPanel(ctx, photo, caption, extra = {}) {
         await ctx.telegram.editMessageCaption(activeChatId, Number(activeMessageId), null, caption, extra);
         return { chatId: activeChatId, messageId: activeMessageId };
       } catch (_) {
+        const msg = String(_?.description || _?.message || '').toLowerCase();
+        if (msg.includes('message is not modified')) return { chatId: activeChatId, messageId: activeMessageId };
         try { await ctx.telegram.deleteMessage(activeChatId, Number(activeMessageId)); } catch (_) {}
       }
     } else {
@@ -64,4 +74,4 @@ async function renderPhotoPanel(ctx, photo, caption, extra = {}) {
   return { chatId: sent.chat.id, messageId: sent.message_id };
 }
 
-module.exports = { clearActivePanel, setActivePanel, renderTextPanel, renderPhotoPanel };
+module.exports = { clearActivePanel, setActivePanel, renderTextPanel, renderPhotoPanel, replaceActivePanel };

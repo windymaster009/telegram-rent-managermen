@@ -12,7 +12,7 @@ const { paginate } = require('../utils/pagination');
 const { safeEditOrReply } = require('../utils/safeEditOrReply');
 const { formatRoomCard, formatTenantRoomCard, formatGuestRoomCard, formatRentalRequestCard, formatPaymentCard, formatTenantCard, formatDashboardCard, getSectionHeader } = require('../formatters/cards');
 const { chunkTwoColumns, getPaginationRow } = require('../navigation/panels');
-const { renderTextPanel, renderPhotoPanel, clearActivePanel } = require('../navigation/panelManager');
+const { renderTextPanel, renderPhotoPanel, clearActivePanel, replaceActivePanel } = require('../navigation/panelManager');
 const { clearFlow, startFlow } = require('../flows/state');
 const { formatMoney } = require('../utils/format');
 const { formatDate, daysBetween } = require('../utils/date');
@@ -31,15 +31,17 @@ function adminChatButtonRow() {
 }
 
 async function sendRoomDetailCard(ctx, room, caption, actions) {
-  if (room.photoFileId || room.photoUrl) {
-    const photo = room.photoFileId || room.photoUrl;
-    try {
-      return await renderPhotoPanel(ctx, photo, caption, actions);
-    } catch (_) {
-      return renderTextPanel(ctx, caption, actions);
+  return replaceActivePanel(ctx, async () => {
+    if (room.photoFileId || room.photoUrl) {
+      const photo = room.photoFileId || room.photoUrl;
+      try {
+        return await renderPhotoPanel(ctx, photo, caption, actions);
+      } catch (_) {
+        return renderTextPanel(ctx, caption, actions);
+      }
     }
-  }
-  return renderTextPanel(ctx, `ℹ️ No photo available\n\n${caption}`, actions);
+    return renderTextPanel(ctx, `ℹ️ No photo available\n\n${caption}`, actions);
+  });
 }
 
 async function sendRoomCard(ctx, room, tenant, payment) {
@@ -47,7 +49,7 @@ async function sendRoomCard(ctx, room, tenant, payment) {
 }
 
 async function renderPanel(ctx, text, keyboard) {
-  return renderTextPanel(ctx, text, keyboard);
+  return replaceActivePanel(ctx, () => renderTextPanel(ctx, text, keyboard));
 }
 
 async function showHome(ctx) {
