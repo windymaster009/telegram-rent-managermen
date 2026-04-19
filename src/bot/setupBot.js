@@ -167,6 +167,33 @@ async function showRoomPickerForSettings(ctx, action, page = 1) {
   return renderPanel(ctx, `Select a room for ${action}:`, { reply_markup: { inline_keyboard: rows } });
 }
 
+async function showRoomDeletePicker(ctx, page = 1) {
+  const rooms = await roomService.listRooms();
+  if (!rooms.length) return renderPanel(ctx, 'No rooms available.');
+
+  if (ctx.session.flow !== 'delete_rooms_multi') {
+    startFlow(ctx, 'delete_rooms_multi', 'select', { selectedRoomIds: [] });
+  }
+
+  const selectedRoomIds = new Set(ctx.session.flowData?.selectedRoomIds || []);
+  const p = paginate(rooms, page, 6);
+  const rows = p.data.map((room) => {
+    const isSelected = selectedRoomIds.has(String(room._id));
+    if (room.status === 'rented') {
+      return [Markup.button.callback(`🔒 ${room.roomNumber} 🔴`, 'noop')];
+    }
+    return [Markup.button.callback(`${isSelected ? '✅' : '⬜'} ${room.roomNumber} 🟢`, callback(['settings', 'roomtoggle', room._id, page]))];
+  });
+
+  rows.push(getPaginationRow(callback(['settings', 'roombulkdel']), p.currentPage, p.totalPages));
+  rows.push([
+    Markup.button.callback(`🗑 Delete (${selectedRoomIds.size})`, 'flow:confirmmultidelete'),
+    Markup.button.callback('🧹 Clear', callback(['settings', 'roomclear', page]))
+  ]);
+  rows.push([Markup.button.callback('🔙 Back', 'settings:room_mgmt')]);
+  return renderPanel(ctx, `🗑 Delete Rooms\n==========\nSelect multiple free rooms to delete.\n----------\nSelected: ${selectedRoomIds.size}`, { reply_markup: { inline_keyboard: rows } });
+}
+
 async function showRoomCard(ctx, roomId) {
   const room = await roomService.getRoomById(roomId);
   if (!room) return safeEditOrReply(ctx, 'Room not found.', { reply_markup: { inline_keyboard: [[Markup.button.callback('🔙 Rooms', 'panel:rooms')]] } });
@@ -365,6 +392,27 @@ function setupBot() {
       if (data === 'flow:cancel') {
         clearFlow(ctx);
         return safeEditOrReply(ctx, 'Cancelled.');
+      }
+      if (data === 'flow:confirmdelete') {
+        if (ctx.session.flow !== 'delete_room' || ctx.session.step !== 'confirm') return ctx.answerCbQuery();
+        await Room.findByIdAndDelete(ctx.session.flowData.roomId);
+        clearFlow(ctx);
+        return safeEditOrReply(ctx, '✅ Room deleted successfully.');
+      }
+      if (data === 'flow:confirmmultidelete') {
+        if (ctx.session.flow !== 'delete_rooms_multi') return ctx.answerCbQuery();
+        const selectedRoomIds = Array.from(new Set(ctx.session.flowData?.selectedRoomIds || []));
+        if (!selectedRoomIds.length) return safeEditOrReply(ctx, 'Please select at least one free room.');
+        const rooms = await Room.find({ _id: { $in: selectedRoomIds } });
+        const deletableIds = rooms.filter((r) => r.status !== 'rented').map((r) => r._id);
+        const blocked = rooms.filter((r) => r.status === 'rented').map((r) => r.roomNumber);
+        if (deletableIds.length) await Room.deleteMany({ _id: { $in: deletableIds } });
+        clearFlow(ctx);
+        return safeEditOrReply(
+          ctx,
+          `✅ Bulk delete completed.\nDeleted: ${deletableIds.length}\nBlocked (rented): ${blocked.length ? blocked.join(', ') : '-'}`,
+          { reply_markup: { inline_keyboard: [[Markup.button.callback('🔙 Room Management', 'settings:room_mgmt')]] } }
+        );
       }
       if (data === 'flow:skipphoto') {
         if (ctx.session.flow === 'add_room' && ctx.session.step === 'photo') {
@@ -634,7 +682,10 @@ function setupBot() {
       }
 
       if (scope === 'settings' && action === 'admins_roles') return openAdminRolesPanel(ctx);
-      if (scope === 'settings' && action === 'room_mgmt') return openRoomManagementPanel(ctx);
+      if (scope === 'settings' && action === 'room_mgmt') {
+        if (ctx.session.flow === 'delete_rooms_multi') clearFlow(ctx);
+        return openRoomManagementPanel(ctx);
+      }
       if (scope === 'settings' && action === 'reminder_tools') return openReminderToolsPanel(ctx);
       if (scope === 'settings' && action === 'admins' && p1 === 'list') {
         const admins = await adminService.listAdmins();
@@ -738,7 +789,7 @@ function setupBot() {
       }
       if (scope === 'settings' && action === 'room' && p1 === 'delete') {
         if (!(await adminService.hasPermission(ctx.from.id, 'delete_rooms'))) return ctx.answerCbQuery('No permission');
-        return showRoomPickerForSettings(ctx, 'delete', 1);
+        return showRoomDeletePicker(ctx, 1);
       }
       if (scope === 'settings' && action === 'room' && p1 === 'photo') {
         if (!(await adminService.hasPermission(ctx.from.id, 'manage_rooms'))) return ctx.answerCbQuery('No permission');
@@ -749,8 +800,27 @@ function setupBot() {
         return showRoomPickerForSettings(ctx, 'edit', 1);
       }
       if (scope === 'settings' && action === 'roompicker') return showRoomPickerForSettings(ctx, p1, Number(p2 || 1));
+      if (scope === 'settings' && action === 'roombulkdel') return showRoomDeletePicker(ctx, Number(p1 || 1));
+      if (scope === 'settings' && action === 'roomclear') {
+        if (ctx.session.flow === 'delete_rooms_multi') ctx.session.flowData.selectedRoomIds = [];
+        return showRoomDeletePicker(ctx, Number(p1 || 1));
+      }
+      if (scope === 'settings' && action === 'roomtoggle') {
+        if (ctx.session.flow !== 'delete_rooms_multi') startFlow(ctx, 'delete_rooms_multi', 'select', { selectedRoomIds: [] });
+        const roomId = p1;
+        const page = Number(p2 || 1);
+        const room = await roomService.getRoomById(roomId);
+        if (!room) return safeEditOrReply(ctx, 'Room not found.');
+        if (room.status === 'rented') return safeEditOrReply(ctx, 'Cannot select rented room.');
+        const current = new Set(ctx.session.flowData?.selectedRoomIds || []);
+        if (current.has(String(roomId))) current.delete(String(roomId));
+        else current.add(String(roomId));
+        ctx.session.flowData.selectedRoomIds = Array.from(current);
+        return showRoomDeletePicker(ctx, page);
+      }
       if (scope === 'settings' && action === 'roomselect') {
-        const [,,, mode, roomId] = data.split(':');
+        const mode = p1;
+        const roomId = p2;
         const room = await roomService.getRoomById(roomId);
         if (!room) return safeEditOrReply(ctx, 'Room not found.');
         if (mode === 'delete') {
