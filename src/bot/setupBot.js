@@ -15,9 +15,17 @@ const { chunkTwoColumns, getPaginationRow } = require('../navigation/panels');
 const { clearFlow, startFlow } = require('../flows/state');
 const { formatMoney } = require('../utils/format');
 const { formatDate, daysBetween } = require('../utils/date');
+const { createQrPayment } = require('../services/paywayQrService');
+const { createPaymentLink } = require('../services/paywayLinkService');
+const { getTenantPaymentHistory } = require('../services/paymentHistoryService');
 
 function callback(parts) {
   return parts.join(':');
+}
+
+function adminChatButtonRow() {
+  if (!env.adminTelegramUsername) return null;
+  return [Markup.button.url('📞 Chat Admin', `https://t.me/${env.adminTelegramUsername.replace('@', '')}`)];
 }
 
 async function sendRoomCard(ctx, room, tenant, payment) {
@@ -119,10 +127,12 @@ async function showPaymentCard(ctx, paymentId) {
 
   return safeEditOrReply(
     ctx,
-    formatPaymentCard(payment),
+    `${formatPaymentCard(payment)}\nGateway type: ${payment.gatewayType || '-'}\nTransaction: ${payment.gatewayTransactionId || '-'}\nQR active: ${payment.qrActive ? 'Yes' : 'No'}\nLink generated: ${payment.gatewayPaymentLink ? 'Yes' : 'No'}`,
     Markup.inlineKeyboard([
-      [Markup.button.callback('✅ Mark Paid', callback(['pay', 'mark', payment.roomId._id]))],
-      [Markup.button.callback('🧾 History', callback(['pay', 'history', payment.roomId._id]))],
+      [Markup.button.callback('🔄 Check Status', callback(['tenant', 'check', payment._id]))],
+      [Markup.button.callback('📷 Resend QR', callback(['tenant', 'payqr', payment._id])), Markup.button.callback('💳 Regenerate Link', callback(['tenant', 'paylink', payment._id]))],
+      [Markup.button.callback('✅ Mark Paid Manually', callback(['pay', 'mark', payment.roomId._id]))],
+      [Markup.button.callback('📜 History', callback(['pay', 'history', payment.roomId._id]))],
       [Markup.button.callback('🔙 Payments', 'panel:payments')]
     ])
   );
@@ -227,12 +237,32 @@ function setupBot() {
     if (!tenant) return ctx.reply('Please link your room first.', getTenantMainMenu(false));
     const payment = await paymentService.getTenantCurrentPayment(tenant._id);
     if (!payment) return renderPanel(ctx, '💳 My Payment\nNo active payment.', Markup.inlineKeyboard([[Markup.button.callback('🔙 Back', 'panel:tenanthome')]]));
-    return renderPanel(ctx, formatPaymentCard(payment), Markup.inlineKeyboard([
-      [Markup.button.callback('🧾 History', callback(['pay', 'history', tenant.roomId._id]))],
-      [Markup.button.callback('📞 Contact Admin', 'tenant:contact')]
-    ]));
+    if (payment.status === 'paid') {
+      return renderPanel(ctx, formatPaymentCard(payment), Markup.inlineKeyboard([
+        [Markup.button.callback('📜 Payment History', callback(['tenant', 'history', '1']))],
+        [Markup.button.callback('🔙 Back', 'panel:tenanthome')]
+      ]));
+    }
+
+    const rows = [
+      [Markup.button.callback('📷 Pay by QR', callback(['tenant', 'payqr', payment._id]))],
+      [Markup.button.callback('💳 Pay by Link', callback(['tenant', 'paylink', payment._id]))],
+      adminChatButtonRow() || [Markup.button.callback('📞 Contact Admin', 'tenant:contact')],
+      [Markup.button.callback('🔙 Back', 'panel:tenanthome')]
+    ];
+
+    return renderPanel(
+      ctx,
+      `💳 Rent Payment\n━━━━━━━━━━\nRoom: ${tenant.roomId.roomNumber}\nAmount: ${formatMoney(payment.amount)}\nDue date: ${formatDate(payment.dueDate)}\nStatus: ${payment.status}`,
+      { reply_markup: { inline_keyboard: rows.filter(Boolean) } }
+    );
   });
-  bot.hears('📞 Contact Admin', async (ctx) => ctx.reply(env.adminTelegramIds.length ? `Admin IDs: ${env.adminTelegramIds.join(', ')}` : 'Admin contacts are not configured.'));
+  bot.hears('📞 Contact Admin', async (ctx) => {
+    if (env.adminTelegramUsername) {
+      return ctx.reply(`Support: @${env.adminTelegramUsername.replace('@', '')}`, Markup.inlineKeyboard([adminChatButtonRow()]));
+    }
+    return ctx.reply('Support is available. Please contact building management.');
+  });
 
   bot.action(/.*/, async (ctx) => {
     try {
@@ -265,7 +295,12 @@ function setupBot() {
       }
       if (data === 'dashboard:refresh') return showDashboard(ctx, true);
       if (data === 'tenant:mypayment') return ctx.reply('Tap 💳 My Payment from main menu.');
-      if (data === 'tenant:contact') return ctx.reply(env.adminTelegramIds.length ? `Admin IDs: ${env.adminTelegramIds.join(', ')}` : 'Admin contacts are not configured.');
+      if (data === 'tenant:contact') {
+        if (env.adminTelegramUsername) {
+          return safeEditOrReply(ctx, `Support: @${env.adminTelegramUsername.replace('@', '')}`, { reply_markup: { inline_keyboard: [adminChatButtonRow()] } });
+        }
+        return safeEditOrReply(ctx, 'Support is available. Please contact building management.');
+      }
 
       const [scope, action, p1, p2] = data.split(':');
 
@@ -325,6 +360,56 @@ function setupBot() {
       }
 
       if (scope === 'tenant' && action === 'list') return showTenantsList(ctx, p1, Number(p2 || 1));
+      if (scope === 'tenant' && action === 'payqr') {
+        const tenant = await tenantService.getTenantByChatId(ctx.chat.id);
+        const payment = await paymentService.getPaymentById(p1);
+        if (!tenant || !payment || String(payment.tenantId?._id) !== String(tenant._id)) return safeEditOrReply(ctx, 'Payment not available.');
+        if (payment.status === 'paid') return safeEditOrReply(ctx, 'This payment is already paid.');
+        const qrPayment = await createQrPayment(payment, tenant, tenant.roomId);
+        const caption = `📷 Rent Payment QR\n━━━━━━━━━━\nRoom: ${tenant.roomId.roomNumber}\nAmount: ${formatMoney(qrPayment.amount)}\nDue date: ${formatDate(qrPayment.dueDate)}\nStatus: Waiting for payment\n\nPlease scan this QR and complete payment.`;
+        const keyboardRows = [
+          [Markup.button.callback('🔄 Check Status', callback(['tenant', 'check', qrPayment._id]))],
+          adminChatButtonRow() || [Markup.button.callback('📞 Contact Admin', 'tenant:contact')],
+          [Markup.button.callback('❌ Cancel QR', callback(['tenant', 'cancelqr', qrPayment._id]))]
+        ];
+        const qrMessage = await ctx.replyWithPhoto(qrPayment.gatewayQrImageUrl || qrPayment.gatewayQrRaw, { caption, reply_markup: { inline_keyboard: keyboardRows.filter(Boolean) } });
+        await paymentService.markQrSession(qrPayment._id, { qrMessageId: qrMessage.message_id, qrChatId: ctx.chat.id, qrActive: true });
+        return ctx.answerCbQuery('QR generated');
+      }
+      if (scope === 'tenant' && action === 'paylink') {
+        const tenant = await tenantService.getTenantByChatId(ctx.chat.id);
+        const payment = await paymentService.getPaymentById(p1);
+        if (!tenant || !payment || String(payment.tenantId?._id) !== String(tenant._id)) return safeEditOrReply(ctx, 'Payment not available.');
+        if (payment.status === 'paid') return safeEditOrReply(ctx, 'This payment is already paid.');
+        const linkPayment = await createPaymentLink(payment, tenant, tenant.roomId);
+        return safeEditOrReply(ctx, '💳 Payment Link\n━━━━━━━━━━\nTap the button below to pay securely.', {
+          reply_markup: { inline_keyboard: [[Markup.button.url('🌐 Open Payment Page', linkPayment.gatewayPaymentLink || 'https://example.com')], [Markup.button.callback('🔄 Check Status', callback(['tenant', 'check', linkPayment._id]))]] }
+        });
+      }
+      if (scope === 'tenant' && action === 'check') {
+        const payment = await paymentService.getPaymentById(p1);
+        if (!payment) return safeEditOrReply(ctx, 'Payment not found.');
+        if (payment.status === 'paid') {
+          return safeEditOrReply(ctx, `✅ Payment confirmed\n━━━━━━━━━━\nRoom: ${payment.roomId?.roomNumber}\nAmount: ${formatMoney(payment.amount)}\nPaid at: ${formatDate(payment.paidAt || payment.paidDate)}\nTransaction: ${payment.gatewayTransactionId || '-'}`, {
+            reply_markup: { inline_keyboard: [[Markup.button.callback('📜 Payment History', callback(['tenant', 'history', '1']))], [Markup.button.callback('🏠 My Room', 'panel:tenanthome'), Markup.button.callback('💳 My Payment', 'tenant:mypayment')]] }
+          });
+        }
+        return ctx.answerCbQuery('Still waiting for payment');
+      }
+      if (scope === 'tenant' && action === 'cancelqr') {
+        await paymentService.cancelQrSession(p1);
+        return safeEditOrReply(ctx, 'QR payment canceled.');
+      }
+      if (scope === 'tenant' && action === 'history') {
+        const tenant = await tenantService.getTenantByChatId(ctx.chat.id);
+        if (!tenant) return safeEditOrReply(ctx, 'Please link your room first.');
+        const history = await getTenantPaymentHistory(tenant._id, Number(p1 || 1), 5);
+        const lines = history.items.map((item, idx) => `Payment #${idx + 1}\nRoom: ${item.roomId?.roomNumber}\nAmount: ${formatMoney(item.amount)}\nDate: ${formatDate(item.paidAt || item.paidDate)}\nMethod: ${item.paymentMethod || 'N/A'}\nTransaction: ${item.gatewayTransactionId || '-'}\nStatus: Paid`);
+        const text = `📜 Payment History\n━━━━━━━━━━\n${lines.length ? lines.join('\n\n') : 'No paid history yet.'}`;
+        const nav = [[Markup.button.callback('⬅️ Prev', callback(['tenant', 'history', Math.max(1, history.page - 1)])), Markup.button.callback(`Page ${history.page}/${history.totalPages}`, 'noop'), Markup.button.callback('Next ➡️', callback(['tenant', 'history', Math.min(history.totalPages, history.page + 1)]))]];
+        nav.push([Markup.button.callback('💳 My Payment', 'tenant:mypayment')]);
+        return safeEditOrReply(ctx, text, { reply_markup: { inline_keyboard: nav } });
+      }
       if (scope === 'tenant' && action === 'view') return showTenantCardPanel(ctx, p1);
       if (scope === 'tenant' && action === 'search') {
         startFlow(ctx, 'search_tenant', 'input');

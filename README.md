@@ -10,6 +10,8 @@ Production-ready Node.js + Express + MongoDB + Telegraf bot for managing a 100-r
 - Guided step-by-step flows with session state and explicit cancel/confirm
 - Existing backend logic/services preserved (room, tenant, payment, reminders, API)
 - Room photo support using Telegram `file_id` (no local file storage)
+- PayWay rent payment flow with QR (primary) and payment link (secondary)
+- Webhook-driven payment confirmation with tenant/admin notifications
 
 ## Stack
 - Node.js
@@ -68,6 +70,32 @@ Tenant:
 - Payment card with room/tenant/amount/due/status
 - Dashboard card with grouped summary sections
 - Room detail supports image display when `photoFileId` exists; otherwise text fallback
+- Tenant payment screen includes Pay by QR, Pay by Link, and Chat Admin
+
+## PayWay payment flow
+1. Tenant opens **💳 My Payment**.
+2. Tenant taps **📷 Pay by QR** or **💳 Pay by Link**.
+3. Bot creates PayWay payment session with exact amount and stores merchant reference.
+4. QR/link is shown to tenant.
+5. Webhook (`POST /api/payments/payway/webhook`) confirms payment.
+6. System marks payment as paid, creates next month unpaid record once, disables active QR, and sends notifications.
+
+## PayWay environment variables
+Add these to `.env`:
+- `PAYWAY_BASE_URL`
+- `PAYWAY_MERCHANT_ID`
+- `PAYWAY_API_KEY`
+- `PAYWAY_MERCHANT_AUTH`
+- `PAYWAY_HASH_KEY`
+- `PAYWAY_WEBHOOK_SECRET`
+- `PAYWAY_RETURN_URL`
+- `PAYWAY_CANCEL_URL`
+- `PAYWAY_WEBHOOK_URL`
+- `PAYWAY_MODE=sandbox`
+
+Admin chat UX:
+- `ADMIN_TELEGRAM_USERNAME` enables `📞 Chat Admin` button (`https://t.me/<username>`).
+- If not set, bot shows generic support text (no internal numeric admin IDs exposed to tenants).
 
 ## Setup
 1. Install dependencies:

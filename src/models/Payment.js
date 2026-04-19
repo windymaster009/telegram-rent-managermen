@@ -21,7 +21,23 @@ const paymentSchema = new mongoose.Schema(
     status: { type: String, enum: ['paid', 'unpaid', 'overdue'], default: 'unpaid', index: true },
     remindedThreeDaysBefore: { type: Boolean, default: false },
     remindedOnDueDate: { type: Boolean, default: false },
-    reminderLog: { type: [reminderLogSchema], default: [] }
+    reminderLog: { type: [reminderLogSchema], default: [] },
+    gateway: { type: String, default: null },
+    gatewayType: { type: String, enum: ['qr', 'link', null], default: null },
+    gatewayPaymentLink: { type: String, default: null },
+    gatewayQrRaw: { type: String, default: null },
+    gatewayQrImageUrl: { type: String, default: null },
+    gatewayTransactionId: { type: String, default: null },
+    gatewayMerchantRef: { type: String, default: null, index: true },
+    gatewayStatus: { type: String, default: null },
+    gatewayRawResponse: { type: mongoose.Schema.Types.Mixed, default: null },
+    paymentMethod: { type: String, default: null },
+    paidAt: { type: Date, default: null },
+    webhookReceivedAt: { type: Date, default: null },
+    qrMessageId: { type: String, default: null },
+    qrChatId: { type: String, default: null },
+    qrActive: { type: Boolean, default: false },
+    successNotifiedAt: { type: Date, default: null }
   },
   { timestamps: true }
 );

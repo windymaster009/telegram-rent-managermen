@@ -9,5 +9,6 @@ router.get('/search', handler.search);
 router.get('/tenants/unlinked', handler.listUnlinkedTenants);
 router.get('/rooms', handler.listRooms);
 router.get('/payments', handler.listPayments);
+router.post('/payments/payway/webhook', handler.paywayWebhook);
 
 module.exports = router;

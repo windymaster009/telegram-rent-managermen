@@ -27,6 +27,8 @@ async function recordPayment({ roomNumber, roomId, dueDate, paidDate }) {
 
   payment.status = 'paid';
   payment.paidDate = paidDate ? new Date(paidDate) : new Date();
+  payment.paidAt = payment.paidDate;
+  payment.qrActive = false;
   await payment.save();
 
   const nextDueDate = addMonth(payment.dueDate, 1);
@@ -42,6 +44,60 @@ async function recordPayment({ roomNumber, roomId, dueDate, paidDate }) {
   }
 
   return payment.populate('tenantId roomId');
+}
+
+async function getPaymentById(paymentId) {
+  return Payment.findById(paymentId).populate('tenantId roomId');
+}
+
+async function getPaymentByMerchantRef(ref) {
+  return Payment.findOne({ gatewayMerchantRef: ref }).populate('tenantId roomId');
+}
+
+async function markQrSession(paymentId, { qrMessageId, qrChatId, qrActive }) {
+  return Payment.findByIdAndUpdate(
+    paymentId,
+    { qrMessageId: String(qrMessageId), qrChatId: String(qrChatId), qrActive: Boolean(qrActive) },
+    { new: true }
+  );
+}
+
+async function cancelQrSession(paymentId) {
+  return Payment.findByIdAndUpdate(paymentId, { qrActive: false }, { new: true });
+}
+
+async function saveGatewayData(paymentId, data) {
+  return Payment.findByIdAndUpdate(paymentId, data, { new: true }).populate('tenantId roomId');
+}
+
+async function finalizeSuccessfulPayment(paymentId, gatewayPayload = {}) {
+  const payment = await Payment.findById(paymentId).populate('tenantId roomId');
+  if (!payment) throw Object.assign(new Error('Payment not found.'), { status: 404 });
+  if (payment.status === 'paid') return payment;
+
+  payment.status = 'paid';
+  payment.paidDate = new Date();
+  payment.paidAt = payment.paidDate;
+  payment.gatewayStatus = gatewayPayload.status || 'success';
+  payment.gatewayTransactionId = gatewayPayload.transactionId || payment.gatewayTransactionId;
+  payment.gatewayRawResponse = gatewayPayload.raw || payment.gatewayRawResponse;
+  payment.paymentMethod = gatewayPayload.method || payment.paymentMethod || 'PayWay';
+  payment.webhookReceivedAt = new Date();
+  payment.qrActive = false;
+  await payment.save();
+
+  const nextDueDate = addMonth(payment.dueDate, 1);
+  const existingNext = await Payment.findOne({ roomId: payment.roomId, tenantId: payment.tenantId, dueDate: nextDueDate });
+  if (!existingNext) {
+    await Payment.create({
+      roomId: payment.roomId,
+      tenantId: payment.tenantId,
+      amount: payment.amount,
+      dueDate: nextDueDate,
+      status: 'unpaid'
+    });
+  }
+  return payment;
 }
 
 async function listPaymentsByStatus(status) {
@@ -117,7 +173,13 @@ async function getReminderCandidates() {
 
 module.exports = {
   getUnpaidForRoom,
+  getPaymentById,
+  getPaymentByMerchantRef,
   recordPayment,
+  markQrSession,
+  cancelQrSession,
+  saveGatewayData,
+  finalizeSuccessfulPayment,
   listPaymentsByStatus,
   listDueSoon,
   getTenantCurrentPayment,

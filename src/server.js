@@ -9,6 +9,7 @@ async function bootstrap() {
   const bot = setupBot();
   if (bot) {
     await bot.launch();
+    app.locals.bot = bot;
     startReminderJob(bot);
   }
 

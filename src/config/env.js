@@ -17,5 +17,16 @@ module.exports = {
   telegramBotToken: process.env.TELEGRAM_BOT_TOKEN || '',
   adminTelegramIds: toNumberList(process.env.ADMIN_TELEGRAM_IDS),
   reminderCron: process.env.REMINDER_CRON || '0 9 * * *',
-  timezone: process.env.TZ || 'Etc/UTC'
+  timezone: process.env.TZ || 'Etc/UTC',
+  adminTelegramUsername: process.env.ADMIN_TELEGRAM_USERNAME || '',
+  paywayBaseUrl: process.env.PAYWAY_BASE_URL || '',
+  paywayMerchantId: process.env.PAYWAY_MERCHANT_ID || '',
+  paywayApiKey: process.env.PAYWAY_API_KEY || '',
+  paywayMerchantAuth: process.env.PAYWAY_MERCHANT_AUTH || '',
+  paywayHashKey: process.env.PAYWAY_HASH_KEY || '',
+  paywayWebhookSecret: process.env.PAYWAY_WEBHOOK_SECRET || '',
+  paywayReturnUrl: process.env.PAYWAY_RETURN_URL || '',
+  paywayCancelUrl: process.env.PAYWAY_CANCEL_URL || '',
+  paywayWebhookUrl: process.env.PAYWAY_WEBHOOK_URL || '',
+  paywayMode: process.env.PAYWAY_MODE || 'sandbox'
 };
