@@ -5,25 +5,40 @@ const { setupBot } = require('./bot/setupBot');
 const { startReminderJob } = require('./jobs/reminderJob');
 const { startChatCleanupJob } = require('./jobs/chatCleanupJob');
 
-async function bootstrap() {
+async function initializeServices() {
   await connectDb();
+  console.log('MongoDB connected');
+
   const bot = setupBot();
-  if (bot) {
-    await bot.launch();
-    app.locals.bot = bot;
-    startReminderJob(bot);
-    startChatCleanupJob(bot);
+  if (!bot) {
+    console.log('Telegram bot token not set. Running API only.');
+    return null;
   }
 
-  app.listen(env.port, () => {
-    console.log(`Server running on port ${env.port}`);
-  });
-
-  process.once('SIGINT', () => bot?.stop('SIGINT'));
-  process.once('SIGTERM', () => bot?.stop('SIGTERM'));
+  await bot.launch();
+  console.log('Telegram bot launched');
+  app.locals.bot = bot;
+  startReminderJob(bot);
+  startChatCleanupJob(bot);
+  return bot;
 }
 
-bootstrap().catch((error) => {
-  console.error('Startup failed:', error);
-  process.exit(1);
+const server = app.listen(env.port, () => {
+  console.log(`Server running on port ${env.port}`);
 });
+
+initializeServices()
+  .then((bot) => {
+    process.once('SIGINT', () => {
+      bot?.stop('SIGINT');
+      server.close(() => process.exit(0));
+    });
+    process.once('SIGTERM', () => {
+      bot?.stop('SIGTERM');
+      server.close(() => process.exit(0));
+    });
+  })
+  .catch((error) => {
+    app.locals.startupError = error;
+    console.error('Background startup failed:', error);
+  });
