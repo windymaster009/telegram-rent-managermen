@@ -58,8 +58,63 @@ async function getTenantCurrentPayment(tenantId) {
   return Payment.findOne({ tenantId, status: { $in: ['unpaid', 'overdue'] } }).sort({ dueDate: 1 }).populate('roomId tenantId');
 }
 
+async function getPaymentById(paymentId) {
+  return Payment.findById(paymentId).populate('tenantId roomId');
+}
+
+async function getPaymentByMerchantRef(merchantRef) {
+  if (!merchantRef) return null;
+  return Payment.findOne({ gatewayMerchantRef: merchantRef }).populate('tenantId roomId');
+}
+
 async function listPaymentHistoryByRoom(roomId) {
   return Payment.find({ roomId }).populate('tenantId roomId').sort({ dueDate: -1 }).limit(12);
+}
+
+async function saveGatewayData(paymentId, updates = {}) {
+  return Payment.findByIdAndUpdate(paymentId, { $set: updates }, { new: true }).populate('tenantId roomId');
+}
+
+async function markQrSession(paymentId, updates = {}) {
+  return saveGatewayData(paymentId, updates);
+}
+
+async function cancelQrSession(paymentId) {
+  return saveGatewayData(paymentId, {
+    qrActive: false,
+    gatewayStatus: 'canceled'
+  });
+}
+
+async function finalizeSuccessfulPayment(paymentId, details = {}) {
+  const payment = await Payment.findById(paymentId).populate('tenantId roomId');
+  if (!payment) {
+    throw Object.assign(new Error('Payment not found.'), { status: 404 });
+  }
+
+  payment.status = 'paid';
+  payment.paidDate = new Date();
+  payment.paidAt = payment.paidDate;
+  payment.paymentMethod = details.method || payment.paymentMethod || 'Online Payment';
+  payment.gatewayStatus = details.status || 'success';
+  payment.gatewayTransactionId = details.transactionId || payment.gatewayTransactionId;
+  payment.gatewayRawResponse = details.raw || payment.gatewayRawResponse;
+  payment.qrActive = false;
+  await payment.save();
+
+  const nextDueDate = addMonth(payment.dueDate, 1);
+  const existingNext = await Payment.findOne({ roomId: payment.roomId, tenantId: payment.tenantId, dueDate: nextDueDate });
+  if (!existingNext) {
+    await Payment.create({
+      roomId: payment.roomId,
+      tenantId: payment.tenantId,
+      amount: payment.amount,
+      dueDate: nextDueDate,
+      status: 'unpaid'
+    });
+  }
+
+  return Payment.findById(paymentId).populate('tenantId roomId');
 }
 
 async function markOverduePayments() {
@@ -121,7 +176,13 @@ module.exports = {
   listPaymentsByStatus,
   listDueSoon,
   getTenantCurrentPayment,
+  getPaymentById,
+  getPaymentByMerchantRef,
   listPaymentHistoryByRoom,
+  saveGatewayData,
+  markQrSession,
+  cancelQrSession,
+  finalizeSuccessfulPayment,
   markOverduePayments,
   getDashboardPaymentStats,
   getReminderCandidates

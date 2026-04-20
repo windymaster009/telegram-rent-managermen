@@ -1369,7 +1369,9 @@ function setupBot() {
 
   bot.catch((err, ctx) => {
     console.error('Bot error:', err);
-    ctx.reply('Something went wrong. Please try again.');
+    return ctx.reply('Something went wrong. Please try again.').catch((replyError) => {
+      console.error('Failed to send bot error reply:', replyError);
+    });
   });
 
   return bot;
